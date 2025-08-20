@@ -414,7 +414,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     const DEFAULT_SETTINGS: GoogleDocsSyncSettings = {
       driveFolderId: '',
       baseVaultFolder: '',
-      conflictPolicy: 'prefer-doc',
+      conflictPolicy: 'last-write-wins',
       pollInterval: 60,
       backgroundSyncEnabled: true,
       backgroundSyncSilentMode: false,
@@ -582,13 +582,18 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
       notice.setMessage('Performing intelligent sync...');
 
+      // Get actual file modification time
+      const fileStats = await this.app.vault.adapter.stat(file.path);
+      const localModificationTime = fileStats?.mtime || Date.now();
+
       // Perform intelligent sync with conflict resolution
       const syncResult = await this.syncService.syncDocument(
         markdown,
         updatedFrontmatter,
         remoteContent,
         remoteRevision,
-        new Date().toISOString(), // modifiedTime - could be improved
+        new Date().toISOString(), // remote modifiedTime
+        { localModificationTime }
       );
 
       if (!syncResult.result.success) {

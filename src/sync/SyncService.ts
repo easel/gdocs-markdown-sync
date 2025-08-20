@@ -22,6 +22,7 @@ export interface SyncOptions {
   dryRun?: boolean;
   force?: boolean;
   skipConflictCheck?: boolean;
+  localModificationTime?: number;
 }
 
 export class SyncService {
@@ -54,6 +55,7 @@ export class SyncService {
           sha256: localSha256,
           revisionId: localFrontmatter.revisionId,
           lastSynced: localFrontmatter['last-synced'],
+          lastModified: options.localModificationTime,
         },
         remote: {
           content: remoteContent,

@@ -1,7 +1,7 @@
 export interface GoogleDocsSyncSettings {
   driveFolderId: string;
   baseVaultFolder?: string; // folder within the vault to mirror Drive content
-  conflictPolicy: 'prefer-doc' | 'prefer-md' | 'merge';
+  conflictPolicy: 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge';
   pollInterval: number; // in seconds
   clientId?: string;
   clientSecret?: string;

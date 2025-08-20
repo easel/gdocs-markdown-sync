@@ -57,9 +57,10 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       .setDesc('How to handle conflicts between local and remote changes')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('prefer-doc', 'Prefer Doc (default)')
-          .addOption('prefer-md', 'Prefer MD')
-          .addOption('merge', 'Merge')
+          .addOption('last-write-wins', 'Last Write Wins (default)')
+          .addOption('prefer-doc', 'Prefer Google Doc')
+          .addOption('prefer-md', 'Prefer Markdown')
+          .addOption('merge', 'Intelligent Merge')
           .setValue(this.plugin.settings.conflictPolicy)
           .onChange(async (value) => {
             this.plugin.settings.conflictPolicy = value as any;

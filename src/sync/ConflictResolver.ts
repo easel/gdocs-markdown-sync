@@ -15,12 +15,13 @@ export interface SyncState {
     sha256: string;
     revisionId?: string;
     lastSynced?: string;
+    lastModified?: number; // Local file modification timestamp
   };
   remote: {
     content: string;
     sha256: string;
     revisionId: string;
-    modifiedTime: string;
+    modifiedTime: string; // ISO string from Google Drive
   };
   lastKnown?: {
     sha256: string;
@@ -196,8 +197,60 @@ export class ConflictResolver {
       case 'merge':
         return this.attemptMerge(state, conflictInfo);
 
+      case 'last-write-wins':
+        return this.applyLastWriteWins(state);
+
       default:
         throw new Error(`Unknown conflict policy: ${this.settings.conflictPolicy}`);
+    }
+  }
+
+  /**
+   * Apply last-write-wins policy based on modification times
+   */
+  private async applyLastWriteWins(state: SyncState): Promise<ConflictResolutionResult> {
+    const { local, remote } = state;
+
+    // Get timestamps for comparison
+    const localModified = local.lastModified || 0;
+    const remoteModified = new Date(remote.modifiedTime).getTime();
+
+    // Determine which version was modified more recently
+    if (localModified > remoteModified) {
+      // Local file is newer
+      return {
+        mergedContent: local.content,
+        hasConflicts: false,
+        conflictMarkers: [
+          `🔄 Conflict resolved using 'last-write-wins' policy`,
+          `📝 Local changes are newer - Google Doc will be updated`,
+          `🕒 Local: ${new Date(localModified).toLocaleString()}`,
+          `🕒 Remote: ${new Date(remoteModified).toLocaleString()}`,
+        ],
+      };
+    } else if (remoteModified > localModified) {
+      // Remote file is newer
+      return {
+        mergedContent: remote.content,
+        hasConflicts: false,
+        conflictMarkers: [
+          `🔄 Conflict resolved using 'last-write-wins' policy`,
+          `📝 Remote changes are newer - local file will be updated`,
+          `🕒 Local: ${new Date(localModified).toLocaleString()}`,
+          `🕒 Remote: ${new Date(remoteModified).toLocaleString()}`,
+        ],
+      };
+    } else {
+      // Same timestamp - prefer local as tie-breaker
+      return {
+        mergedContent: local.content,
+        hasConflicts: false,
+        conflictMarkers: [
+          `🔄 Conflict resolved using 'last-write-wins' policy`,
+          `📝 Timestamps identical - preferring local changes as tie-breaker`,
+          `🕒 Both modified: ${new Date(localModified).toLocaleString()}`,
+        ],
+      };
     }
   }
 
@@ -342,15 +395,17 @@ export class ConflictResolver {
   /**
    * Validate that a policy string is valid
    */
-  static isValidPolicy(policy: string): policy is 'prefer-doc' | 'prefer-md' | 'merge' {
-    return ['prefer-doc', 'prefer-md', 'merge'].includes(policy);
+  static isValidPolicy(policy: string): policy is 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge' {
+    return ['last-write-wins', 'prefer-doc', 'prefer-md', 'merge'].includes(policy);
   }
 
   /**
    * Get human-readable description of conflict policy
    */
-  static getPolicyDescription(policy: 'prefer-doc' | 'prefer-md' | 'merge'): string {
+  static getPolicyDescription(policy: 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge'): string {
     switch (policy) {
+      case 'last-write-wins':
+        return 'Use the version that was modified most recently';
       case 'prefer-doc':
         return 'Always use Google Doc version when conflicts occur';
       case 'prefer-md':
