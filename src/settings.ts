@@ -1,6 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 
-import GoogleDocsSyncPlugin from './plugin-main';
+import type GoogleDocsSyncPlugin from './plugin-main';
 
 export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
   plugin: GoogleDocsSyncPlugin;
@@ -10,6 +10,8 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
   constructor(app: App, plugin: GoogleDocsSyncPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+    // Register this settings tab with the plugin for auth callbacks
+    (plugin as any).settingsTab = this;
   }
 
   async display(): Promise<void> {
@@ -19,8 +21,10 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
 
     containerEl.createEl('h2', { text: 'Google Docs Sync Settings' });
 
-    // Add authentication status section at the top
+    // Authentication Status & Controls (consolidated at top)
     await this.displayAuthenticationStatus(containerEl);
+
+    containerEl.createEl('h3', { text: 'Google Drive Configuration' });
 
     new Setting(containerEl)
       .setName('Drive Folder ID')
@@ -63,19 +67,6 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl)
-      .setName('Poll Interval')
-      .setDesc('How often to check for changes (in seconds)')
-      .addText((text) =>
-        text.setValue(this.plugin.settings.pollInterval.toString()).onChange(async (value) => {
-          const num = parseInt(value, 10);
-          if (!isNaN(num)) {
-            this.plugin.settings.pollInterval = num;
-            await this.plugin.saveSettings();
-          }
-        }),
-      );
-
     containerEl.createEl('h3', { text: 'Background Sync' });
 
     new Setting(containerEl)
@@ -88,6 +79,19 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             this.plugin.settings.backgroundSyncEnabled = value;
             await this.plugin.saveSettings();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName('Poll Interval')
+      .setDesc('How often to check for changes in the background (in seconds)')
+      .addText((text) =>
+        text.setValue(this.plugin.settings.pollInterval.toString()).onChange(async (value) => {
+          const num = parseInt(value, 10);
+          if (!isNaN(num)) {
+            this.plugin.settings.pollInterval = num;
+            await this.plugin.saveSettings();
+          }
+        }),
       );
 
     new Setting(containerEl)
@@ -143,68 +147,51 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           });
       });
 
-    containerEl.createEl('h3', { text: 'Google OAuth Configuration' });
+    // Advanced OAuth Configuration Section (at bottom, collapsed by default)
+    const advancedHeader = containerEl.createEl('h3', { text: '▶ Advanced OAuth Configuration' });
+    advancedHeader.style.cursor = 'pointer';
+    advancedHeader.style.userSelect = 'none';
+    
+    const advancedContent = containerEl.createDiv();
+    advancedContent.style.display = 'none';
+    
+    const oauthDescription = advancedContent.createDiv({ cls: 'oauth-description' });
+    oauthDescription.createEl('p', { 
+      text: 'Default OAuth credentials are provided. Only modify these if you want to use your own Google Cloud OAuth client.'
+    });
 
-    const oauthDesc = containerEl.createDiv({ cls: 'oauth-description' });
-    oauthDesc.innerHTML = `
-      <p>Configure your Google OAuth credentials. You'll need to create a project in the <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a> and set up OAuth2 credentials.</p>
-    `;
-
-    new Setting(containerEl)
-      .setName('Client ID')
-      .setDesc('Google OAuth Client ID from Google Cloud Console')
+    new Setting(advancedContent)
+      .setName('OAuth Client ID')
+      .setDesc('Google OAuth Client ID for authentication')
       .addText((text) =>
         text
-          .setPlaceholder('Enter Client ID')
+          .setPlaceholder('Google OAuth Client ID')
           .setValue(this.plugin.settings.clientId || '')
           .onChange(async (value) => {
-            this.plugin.settings.clientId = value;
+            this.plugin.settings.clientId = value.trim() || undefined;
             await this.plugin.saveSettings();
-            // Update auth status when credentials change
-            await this.updateAuthStatus();
           }),
       );
 
-    new Setting(containerEl)
-      .setName('Client Secret')
-      .setDesc('Google OAuth Client Secret from Google Cloud Console')
+    new Setting(advancedContent)
+      .setName('OAuth Client Secret')
+      .setDesc('Google OAuth Client Secret for authentication')
       .addText((text) =>
         text
-          .setPlaceholder('Enter Client Secret')
+          .setPlaceholder('Google OAuth Client Secret')
           .setValue(this.plugin.settings.clientSecret || '')
           .onChange(async (value) => {
-            this.plugin.settings.clientSecret = value;
+            this.plugin.settings.clientSecret = value.trim() || undefined;
             await this.plugin.saveSettings();
-            // Update auth status when credentials change
-            await this.updateAuthStatus();
           }),
       );
 
-    new Setting(containerEl)
-      .setName('Profile')
-      .setDesc('Token profile name for managing multiple accounts (default: default)')
-      .addText((text) =>
-        text
-          .setPlaceholder('default')
-          .setValue(this.plugin.settings.profile || 'default')
-          .onChange(async (value) => {
-            this.plugin.settings.profile = value || 'default';
-            await this.plugin.saveSettings();
-            // Update auth status when profile changes
-            await this.updateAuthStatus();
-          }),
-      );
-
-    // Authentication actions section
-    containerEl.createEl('h3', { text: 'Authentication' });
-
-    const authSetting = new Setting(containerEl)
-      .setName('Google Account Access')
-      .setDesc('Authenticate with Google to enable document synchronization');
-
-    // Add the auth button that will be dynamically updated
-    this.authButton = authSetting.controlEl;
-    await this.updateAuthButton();
+    // Add toggle functionality
+    advancedHeader.addEventListener('click', () => {
+      const isHidden = advancedContent.style.display === 'none';
+      advancedContent.style.display = isHidden ? 'block' : 'none';
+      advancedHeader.textContent = isHidden ? '▼ Advanced OAuth Configuration' : '▶ Advanced OAuth Configuration';
+    });
   }
 
   /**
@@ -212,7 +199,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
    */
   private async displayAuthenticationStatus(containerEl: HTMLElement): Promise<void> {
     const statusSection = containerEl.createDiv({ cls: 'auth-status-section' });
-    statusSection.createEl('h3', { text: 'Authentication Status' });
+    statusSection.createEl('h3', { text: 'Authentication' });
 
     this.authStatusDiv = statusSection.createDiv({ cls: 'auth-status-display' });
     await this.updateAuthStatus();
@@ -239,6 +226,36 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           text: 'Successfully connected to Google Docs API.',
           cls: 'status-message',
         });
+
+        // Add authentication management buttons
+        const buttonContainer = this.authStatusDiv.createDiv({ cls: 'auth-button-container modal-button-container' });
+        
+        const clearButton = buttonContainer.createEl('button', {
+          text: 'Clear Authentication',
+          cls: 'auth-button clear',
+        });
+        clearButton.onclick = async () => {
+          try {
+            await this.plugin.clearAuthentication();
+            await this.updateAuthStatus();
+          } catch (error) {
+            console.error('Failed to clear authentication:', error);
+          }
+        };
+
+        const reAuthButton = buttonContainer.createEl('button', {
+          text: 'Re-authenticate',
+          cls: 'auth-button reauth',
+        });
+        reAuthButton.onclick = async () => {
+          try {
+            await this.plugin.clearAuthentication();
+            await this.plugin.startAuthFlow();
+            await this.updateAuthStatus();
+          } catch (error) {
+            console.error('Failed to re-authenticate:', error);
+          }
+        };
       } else {
         this.authStatusDiv.className = 'auth-status-display not-authenticated';
         this.authStatusDiv.createEl('div', {
@@ -262,6 +279,22 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             stepsList.createEl('li', { text: step });
           }
         }
+
+        // Add start authentication button
+        const buttonContainer = this.authStatusDiv.createDiv({ cls: 'auth-button-container modal-button-container' });
+        const authButton = buttonContainer.createEl('button', {
+          text: 'Start Authentication',
+          cls: 'auth-button start mod-cta',
+        });
+        authButton.onclick = async () => {
+          try {
+            await this.plugin.startAuthFlow();
+            await this.updateAuthStatus();
+          } catch (error) {
+            console.error('Auth flow failed:', error);
+            await this.updateAuthStatus();
+          }
+        };
       }
     } catch (error) {
       this.authStatusDiv.className = 'auth-status-display error';
@@ -327,8 +360,8 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           try {
             await this.plugin.clearAuthentication();
             await this.plugin.startAuthFlow();
-            // Update status after a delay to allow auth flow
-            setTimeout(() => this.updateAuthStatus(), 1000);
+            // The status will be updated via the callback in handleAuthCallback
+            await this.updateAuthStatus();
           } catch (error) {
             console.error('Failed to re-authenticate:', error);
           }
@@ -342,8 +375,9 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
         authButton.onclick = async () => {
           try {
             await this.plugin.startAuthFlow();
-            // Update status after a delay to allow auth flow
-            setTimeout(() => this.updateAuthStatus(), 1000);
+            // The status will be updated via the callback in handleAuthCallback
+            // But also update now in case of immediate errors
+            await this.updateAuthStatus();
           } catch (error) {
             console.error('Auth flow failed:', error);
             // Update status to show any error messages
@@ -351,13 +385,6 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           }
         };
 
-        // Show CLI alternative
-        const cliNote = this.authButton.createDiv({ cls: 'auth-alternative' });
-        cliNote.innerHTML = `
-          <p>Alternative: Use CLI authentication:</p>
-          <code>gdocs-markdown-sync auth</code>
-          <p>The plugin will automatically detect CLI credentials.</p>
-        `;
       }
     } catch (error) {
       this.authButton.createEl('div', {

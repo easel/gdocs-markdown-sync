@@ -161,23 +161,28 @@ export function buildFrontMatter(data: FrontMatter, content: string): string {
 }
 
 export async function computeSHA256(content: string): Promise<string> {
-  // Use Bun's built-in crypto in CLI environment, Web Crypto API in browser/Obsidian
-  if (typeof Bun !== 'undefined') {
-    // Bun environment (CLI/tests) - use Bun's native crypto hasher
-    const hasher = new Bun.CryptoHasher('sha256');
-    hasher.update(content);
-    return hasher.digest('hex');
-  } else if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    // Node.js environment fallback
-    const crypto = await import('crypto');
-    return crypto.createHash('sha256').update(content).digest('hex');
-  } else {
-    // Browser/Obsidian environment
+  // Unified crypto implementation using Web Crypto API
+  // 
+  // WHY WEB CRYPTO API FOR BOTH CLI AND PLUGIN:
+  // - Bun supports Web Crypto API (crypto.subtle) natively
+  // - Obsidian/Electron provides Web Crypto API reliably  
+  // - Eliminates platform-specific crypto handling
+  // - More consistent behavior across environments
+  // - Avoids Node.js crypto import issues in Electron
+  
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    // Use Web Crypto API for both Bun CLI and Obsidian plugin
     const encoder = new TextEncoder();
     const data = encoder.encode(content);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
     return hashHex;
+  } else if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+    // Pure Node.js environment fallback (should be rare, mainly for older test environments)
+    const crypto = await import('crypto');
+    return crypto.createHash('sha256').update(content).digest('hex');
+  } else {
+    throw new Error('No crypto implementation available for SHA256 hashing');
   }
 }

@@ -130,9 +130,8 @@ export class UnifiedOAuthManager {
   private async startNodeAuthFlow(): Promise<Credentials> {
     // Import express only in Node.js environment
     const express = await import('express');
-    const { createHash, randomBytes } = await import('crypto');
 
-    const { codeVerifier, codeChallenge } = this.generatePKCE(randomBytes, createHash);
+    const { codeVerifier, codeChallenge } = await this.generatePKCE();
 
     return new Promise((resolve, reject) => {
       const app = express.default();
@@ -215,7 +214,7 @@ export class UnifiedOAuthManager {
    * Browser environment auth flow (Obsidian with manual code entry)
    */
   private async startBrowserAuthFlow(): Promise<Credentials> {
-    const { codeChallenge } = this.generatePKCEBrowser();
+    const { codeChallenge } = await this.generatePKCE();
 
     // For browser, we'll use a manual flow
     const redirectUri = 'urn:ietf:wg:oauth:2.0:oob'; // Out-of-band flow
@@ -232,32 +231,31 @@ export class UnifiedOAuthManager {
   }
 
   /**
-   * Generate PKCE challenge and verifier (Node.js version)
+   * Generate PKCE challenge and verifier using Web Crypto API
+   * Works in both Bun CLI and Obsidian environments
    */
-  private generatePKCE(
-    randomBytes: any,
-    createHash: any,
-  ): { codeVerifier: string; codeChallenge: string } {
-    const codeVerifier = randomBytes(32).toString('base64url');
-    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
-    return { codeVerifier, codeChallenge };
-  }
-
-  /**
-   * Generate PKCE challenge and verifier (Browser version)
-   */
-  private generatePKCEBrowser(): { codeVerifier: string; codeChallenge: string } {
-    // Use Web Crypto API for browser compatibility
+  private async generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: string }> {
+    // Generate cryptographically secure random bytes for code verifier
     const array = new Uint8Array(32);
     crypto.getRandomValues(array);
+    
+    // Convert to base64url format (RFC 7636)
     const codeVerifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=/g, '');
 
-    // For browser, we'll need to implement SHA256 with Web Crypto API
-    // This is simplified for now
-    const codeChallenge = codeVerifier; // Should be SHA256 hash
+    // Create SHA256 hash of verifier for challenge
+    const encoder = new TextEncoder();
+    const data = encoder.encode(codeVerifier);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = new Uint8Array(hashBuffer);
+    
+    // Convert hash to base64url format
+    const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
 
     return { codeVerifier, codeChallenge };
   }

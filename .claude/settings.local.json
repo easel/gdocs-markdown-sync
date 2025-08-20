@@ -29,7 +29,11 @@
       "Bash(bun run:*)",
       "Bash(unzip:*)",
       "Bash(bun test:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(grep:*)",
+      "Bash(node:*)",
+      "Bash(bun:*)",
+      "Bash(cp:*)"
     ],
     "deny": [],
     "ask": [],

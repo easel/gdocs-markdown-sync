@@ -4,15 +4,16 @@ A complete TypeScript solution for bidirectional synchronization between Google 
 
 ## ✅ Production Ready Features
 
-- **🔐 Secure PKCE OAuth 2.0** - No client secrets required!
+- **🔐 Secure PKCE OAuth 2.0** - No client secrets required for CLI, unified authentication across both CLI and plugin
 - **🔄 Bidirectional Sync** - Pull from Google Docs, push Markdown back
 - **⚔️ Intelligent Conflict Resolution** - Smart 3-way merge with automatic and manual resolution modes
-- **📝 Frontmatter Integration** - Automatic docId/revision tracking
+- **📝 Frontmatter Integration** - Automatic docId/revision tracking with SHA256 checksums
 - **🚫 Ignore File Support** - `.gdocs-sync-ignore` with .gitignore syntax
-- **🕐 Polling Support** - Continuous sync with configurable intervals
+- **🔄 Background Sync** - Automatic background synchronization with configurable intervals
+- **🎯 File Change Monitoring** - Real-time detection and queuing of file changes
 - **🧪 Comprehensive Testing** - 50+ unit tests + integration tests
-- **💻 CLI Tool** - Standalone command-line interface
-- **🔌 Obsidian Plugin** - Full vault integration
+- **💻 CLI Tool** - Standalone command-line interface with PKCE authentication
+- **🔌 Obsidian Plugin** - Full vault integration with unified authentication UI
 
 ## Architecture
 
@@ -74,13 +75,32 @@ gdocs-markdown-sync push --drive-folder-id <folder-id> --local-dir ./docs
 # Bidirectional sync
 gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs
 
-# Continuous sync (every 5 minutes)
-gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --watch
+# Continuous sync (every 5 minutes) - CLI polling
+gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --watch --poll-interval 300
+
+# One-time sync with conflict resolution
+gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --conflicts prefer-doc
 ```
 
 ### 2B. Use as Obsidian Plugin
 
-After installation (see above), enable "Google Docs Sync" in Obsidian → Settings → Community Plugins, then configure your Google Drive settings in the plugin settings.
+After installation:
+
+1. **Enable the Plugin**: Obsidian → Settings → Community Plugins → Google Docs Sync → Enable
+2. **Configure Settings**: 
+   - Set Google Drive folder ID and local vault folder
+   - OAuth credentials are provided by default but can be customized in Advanced settings
+3. **Authenticate**: Click "Start Authentication" in plugin settings
+   - Browser opens automatically for Google OAuth
+   - Copy authorization code when prompted
+   - Background sync starts automatically once authenticated
+
+#### Background Sync Features
+- **Automatic sync**: Continuously syncs files based on poll interval
+- **File monitoring**: Detects file changes and queues them for sync
+- **Silent mode**: Reduces notifications for background operations
+- **Status monitoring**: Real-time sync status in plugin settings
+- **Manual controls**: Force sync, toggle on/off, view detailed status
 
 ## Commands Reference
 
@@ -220,6 +240,41 @@ private/
 
 The ignore functionality works with both the CLI tool and Obsidian plugin.
 
+## Background Sync (Obsidian Plugin)
+
+The Obsidian plugin provides automatic background synchronization that continuously monitors and syncs your files.
+
+### Configuration
+
+Configure background sync in the plugin settings under the "Background Sync" section:
+
+- **Enable Background Sync** - Toggle automatic sync on/off
+- **Poll Interval** - How often to check for changes (in seconds, default: 60)
+- **Silent Background Mode** - Reduce notifications for background operations
+
+### Features
+
+- **File Change Monitoring** - Automatically detects when you edit files in Obsidian
+- **Intelligent Queuing** - Debounces rapid changes to avoid excessive API calls  
+- **Batch Processing** - Efficiently syncs multiple files together
+- **Error Recovery** - Exponential backoff retry logic for failed syncs
+- **Status Reporting** - Real-time sync status and statistics
+- **Manual Controls** - Force sync, toggle on/off, view detailed status
+
+### Status Indicators
+
+The plugin shows sync status in the settings panel:
+- 🟢 **Active** - Background sync running normally
+- 🟡 **Syncing** - Currently processing files  
+- 🔴 **Issues** - Errors detected (check console for details)
+- ⚪ **Disabled** - Background sync turned off
+
+### Commands
+
+Use Obsidian's command palette to control sync:
+- "Toggle background sync" - Enable/disable background sync
+- "Force background sync now" - Immediately sync all queued files
+
 ## Testing
 
 ### Unit Tests (50+ tests)
@@ -300,19 +355,35 @@ src/
 
 ## Authentication Setup
 
-- Prerequisites:
-  - Enable “Google Drive API” and “Google Docs API” in your Google Cloud project (APIs & Services → Library).
-  - Configure an OAuth consent screen (External is fine); add your Google account to Test users.
-- CLI (PKCE):
-  - No client secret required. Optionally set `GOOGLE_OAUTH_CLIENT_ID` to override the default public client ID.
-  - Run `gdocs-markdown-sync auth`. Tokens are saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`.
-- Obsidian Plugin (OAuth):
-  - Create a Desktop App OAuth client (Credentials → Create Credentials → OAuth client ID → Desktop App).
-  - Enter the Client ID/Secret in the plugin settings, then click “Start Auth Flow”.
-- Troubleshooting:
-  - redirect_uri_mismatch: ensure the Desktop App client type; loopback redirect is set programmatically.
-  - access_denied/restricted scope: verify APIs enabled and consent screen configured.
-  - 404/403 on files: ensure the signed-in account has access to the Drive folder and Docs.
+### Prerequisites
+- Enable "Google Drive API" and "Google Docs API" in your Google Cloud project (APIs & Services → Library)
+- Configure an OAuth consent screen (External is fine); add your Google account to Test users
+
+### CLI Authentication (PKCE - Recommended)
+- **No client secret required** - uses secure PKCE flow with public client
+- **Simple setup**: Run `gdocs-markdown-sync auth` and follow browser prompts
+- **Token storage**: Tokens saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`
+- **Override client**: Optionally set `GOOGLE_OAUTH_CLIENT_ID` environment variable
+
+### Obsidian Plugin Authentication
+- **Built-in credentials**: Plugin includes default OAuth client credentials
+- **Easy setup**: Just click "Start Authentication" in plugin settings
+- **Unified UX**: Streamlined authentication dialog with fallback for manual auth
+- **Custom credentials**: Advanced users can provide custom OAuth client in settings
+
+#### Authentication Flow
+1. Click "Start Authentication" in plugin settings
+2. Browser opens automatically to Google OAuth page
+3. Sign in and authorize the application
+4. Copy the authorization code from the success page
+5. Paste code in plugin dialog and click "Authenticate"
+6. Background sync starts automatically
+
+#### Troubleshooting
+- **Browser didn't open?** Use the "Browser didn't open?" section in the auth dialog to copy the login link manually
+- **redirect_uri_mismatch**: Ensure Desktop App client type (for custom credentials)
+- **access_denied/restricted scope**: Verify APIs enabled and consent screen configured
+- **404/403 on files**: Ensure signed-in account has access to Drive folder and Docs
 
 ## Releases
 

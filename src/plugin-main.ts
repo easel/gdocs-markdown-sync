@@ -11,7 +11,11 @@ import { SyncStatusManager } from './sync/SyncStatusManager';
 import { SyncUtils, FrontMatter } from './sync/SyncUtils';
 import { GoogleDocsSyncSettings as ImportedSettings } from './types';
 import { ErrorUtils, BaseError } from './utils/ErrorUtils';
-import { getBuildVersion } from './version';
+import { getBuildVersion, VERSION_INFO } from './version';
+
+// Ensure version info is available at runtime
+const PLUGIN_VERSION = getBuildVersion();
+const PLUGIN_VERSION_DETAILS = VERSION_INFO;
 
 interface GoogleDocsSyncSettings extends ImportedSettings {
   // Plugin-specific extensions can be added here
@@ -208,8 +212,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   private currentOperations: Map<string, EnhancedNotice> = new Map();
   private authManager!: PluginAuthManager;
   async onload() {
-    const buildVersion = getBuildVersion();
-    console.log(`Loading Google Docs Sync plugin ${buildVersion}`);
+    console.log(`🚀 Loading Google Docs Sync plugin ${PLUGIN_VERSION}`);
+    console.log(`📊 Plugin Details: version=${PLUGIN_VERSION_DETAILS.version}, commit=${PLUGIN_VERSION_DETAILS.commit}, dirty=${PLUGIN_VERSION_DETAILS.isDirty}, buildTime=${PLUGIN_VERSION_DETAILS.buildTime}`);
 
     await this.loadSettings();
 
@@ -384,11 +388,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       this.backgroundSyncManager.start();
     }
 
-    new Notice(`Google Docs Sync plugin loaded (${buildVersion})`);
+    new Notice(`Google Docs Sync plugin loaded (${PLUGIN_VERSION})`);
   }
 
   async onunload() {
-    console.log('Unloading Google Docs Sync plugin');
+    console.log(`🛑 Unloading Google Docs Sync plugin ${PLUGIN_VERSION}`);
 
     // Stop and cleanup background sync
     if (this.backgroundSyncManager) {
@@ -412,6 +416,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       pollInterval: 60,
       backgroundSyncEnabled: true,
       backgroundSyncSilentMode: false,
+      // Public OAuth Client - Intentionally committed for desktop/plugin use
+      // gitleaks:allow
+      clientId: '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com',
+      // gitleaks:allow
+      clientSecret: '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',
     };
 
     this.settings = Object.assign(DEFAULT_SETTINGS, await this.loadData());
@@ -1293,18 +1302,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       // Try to open browser with fallback strategies
       const browserOpened = await this.tryOpenBrowser(authUrl);
 
-      if (browserOpened) {
-        // Show success modal with next steps
-        new AuthSuccessModal(this.app, authUrl, () => {
-          // Callback for manual URL opening
-          this.copyToClipboard(authUrl);
-        }).open();
-      } else {
-        // Show manual auth modal with rich UX
-        new ManualAuthModal(this.app, authUrl, (authCode: string) => {
-          this.handleAuthCallback(authCode);
-        }).open();
-      }
+      // Always show the unified auth modal that assumes browser opened
+      // but provides fallback for manual opening
+      new UnifiedAuthModal(this.app, authUrl, (authCode: string) => {
+        this.handleAuthCallback(authCode);
+      }).open();
     } catch (error) {
       console.error('Auth flow failed:', error);
       new Notice(`Authentication failed: ${(error as Error).message}`);
@@ -1377,18 +1379,31 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       const tokens = await this.exchangeCodeForTokens(authCode, this.pkceVerifier);
 
       // Store tokens using Obsidian plugin storage
-      await this.authManager.storeCredentials({
+      const credentials = {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         token_type: tokens.token_type || 'Bearer',
+        scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
         expiry_date: tokens.expiry_date || (Date.now() + (tokens.expires_in || 3600) * 1000),
-      });
+      };
+
+      // Validate credentials before storing
+      if (!credentials.access_token || !credentials.refresh_token) {
+        throw new Error('Invalid token response: missing required tokens');
+      }
+
+      await this.authManager.storeCredentials(credentials);
 
       // Clear PKCE verifier
       this.pkceVerifier = null;
 
       notice.setMessage('✅ Authentication successful!');
       setTimeout(() => notice.hide(), 3000);
+
+      // Trigger settings page update if available
+      if ((this as any).settingsTab) {
+        (this as any).settingsTab.updateAuthStatus?.();
+      }
     } catch (error) {
       console.error('Token exchange failed:', error);
       notice.setMessage(`❌ Authentication failed: ${(error as Error).message}`);
@@ -1584,58 +1599,10 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 }
 
 /**
- * Modal for successful browser opening with next steps
+ * Unified authentication modal following common "browser didn't open" UX pattern
+ * Assumes browser opened successfully by default, with fallback options
  */
-class AuthSuccessModal extends Modal {
-  private onCopyUrl: () => void;
-
-  constructor(app: any, _authUrl: string, onCopyUrl: () => void) {
-    super(app);
-    this.onCopyUrl = onCopyUrl;
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-
-    contentEl.createEl('h2', { text: 'Browser Opened Successfully' });
-
-    const instructions = contentEl.createDiv({ cls: 'auth-instructions' });
-    instructions.createEl('p', { text: '1. Complete the Google authentication in your browser' });
-    instructions.createEl('p', { text: '2. Copy the authorization code from the success page' });
-    instructions.createEl('p', { text: '3. Return here and paste it when prompted' });
-
-    const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-
-    const copyButton = buttonContainer.createEl('button', {
-      text: 'Copy Auth URL',
-      cls: 'mod-cta',
-    });
-    copyButton.onclick = () => {
-      this.onCopyUrl();
-    };
-
-    const continueButton = buttonContainer.createEl('button', {
-      text: 'I have the code',
-      cls: 'mod-cta',
-    });
-    continueButton.onclick = () => {
-      this.close();
-      new AuthCodeModal(this.app, (code: string) => {
-        // Handle code submission
-        console.log('Auth code received:', code);
-      }).open();
-    };
-
-    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
-    cancelButton.onclick = () => this.close();
-  }
-}
-
-/**
- * Modal for manual auth with rich UX and URL copying
- */
-class ManualAuthModal extends Modal {
+class UnifiedAuthModal extends Modal {
   private authUrl: string;
   private onAuthCode: (code: string) => void;
 
@@ -1649,46 +1616,15 @@ class ManualAuthModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    contentEl.createEl('h2', { text: 'Manual Authentication Required' });
+    contentEl.createEl('h2', { text: 'Complete Authentication' });
 
-    const explanation = contentEl.createDiv({ cls: 'auth-explanation' });
-    explanation.createEl('p', {
-      text: 'Unable to open browser automatically. Please follow these steps:',
+    // Primary instructions assuming browser opened
+    const primaryInstructions = contentEl.createDiv({ cls: 'auth-primary-instructions' });
+    primaryInstructions.createEl('p', {
+      text: 'Complete the Google authentication in your browser, then paste the authorization code below:'
     });
 
-    const steps = explanation.createEl('ol');
-    steps.createEl('li', { text: 'Copy the authorization URL below' });
-    steps.createEl('li', { text: 'Open it in your browser manually' });
-    steps.createEl('li', { text: 'Complete the Google authentication' });
-    steps.createEl('li', { text: 'Copy the authorization code from the success page' });
-    steps.createEl('li', { text: 'Paste it in the field below' });
-
-    // URL display with copy button
-    const urlContainer = contentEl.createDiv({ cls: 'auth-url-container' });
-    urlContainer.createEl('label', { text: 'Authorization URL:' });
-
-    const urlDisplay = urlContainer.createEl('textarea', {
-      cls: 'auth-url-display',
-      attr: { readonly: 'true' },
-    });
-    urlDisplay.value = this.authUrl;
-    urlDisplay.rows = 4;
-
-    const copyUrlButton = urlContainer.createEl('button', {
-      text: 'Copy URL',
-      cls: 'mod-cta',
-    });
-    copyUrlButton.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(this.authUrl);
-        new Notice('URL copied to clipboard!');
-      } catch (error) {
-        urlDisplay.select();
-        new Notice('URL selected - press Ctrl+C to copy');
-      }
-    };
-
-    // Auth code input
+    // Auth code input (primary focus)
     const codeContainer = contentEl.createDiv({ cls: 'auth-code-container' });
     codeContainer.createEl('label', { text: 'Authorization Code:' });
 
@@ -1701,6 +1637,7 @@ class ManualAuthModal extends Modal {
     // Progress indicator
     const statusDiv = contentEl.createDiv({ cls: 'auth-status' });
 
+    // Main action buttons
     const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
 
     const submitButton = buttonContainer.createEl('button', {
@@ -1725,51 +1662,54 @@ class ManualAuthModal extends Modal {
     const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
     cancelButton.onclick = () => this.close();
 
-    // Focus on input
-    setTimeout(() => codeInput.focus(), 100);
-  }
-}
-
-/**
- * Simple modal for auth code entry
- */
-class AuthCodeModal extends Modal {
-  private onCode: (code: string) => void;
-
-  constructor(app: any, onCode: (code: string) => void) {
-    super(app);
-    this.onCode = onCode;
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-
-    contentEl.createEl('h2', { text: 'Enter Authorization Code' });
-
-    const input = contentEl.createEl('input', {
-      type: 'text',
-      placeholder: 'Paste your authorization code here...',
-      cls: 'auth-code-input',
+    // Fallback section for "browser didn't open" scenario
+    const fallbackSection = contentEl.createEl('details', { cls: 'auth-fallback-section' });
+    const fallbackSummary = fallbackSection.createEl('summary', { 
+      text: 'Browser didn\'t open? Click here for manual steps',
+      cls: 'auth-fallback-toggle'
     });
 
-    const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-
-    const submitButton = buttonContainer.createEl('button', {
-      text: 'Submit',
-      cls: 'mod-cta',
+    const fallbackContent = fallbackSection.createDiv({ cls: 'auth-fallback-content' });
+    
+    // Copy login link button (left-aligned, secondary)
+    const linkContainer = fallbackContent.createDiv({ cls: 'auth-link-container' });
+    const copyLinkButton = linkContainer.createEl('button', {
+      text: 'Copy Login Link',
+      cls: 'auth-copy-link-btn'
     });
-    submitButton.onclick = () => {
-      const code = input.value.trim();
-      if (code) {
-        this.onCode(code);
-        this.close();
+    copyLinkButton.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(this.authUrl);
+        new Notice('Authentication URL copied to clipboard!');
+      } catch (error) {
+        // Fallback: show URL for manual selection
+        const urlDisplay = linkContainer.createEl('textarea', {
+          cls: 'auth-url-display',
+          attr: { readonly: 'true' }
+        });
+        urlDisplay.value = this.authUrl;
+        urlDisplay.rows = 4;
+        urlDisplay.select();
+        new Notice('URL shown below - select and copy manually');
       }
     };
 
-    const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
-    cancelButton.onclick = () => this.close();
+    const linkExplanation = linkContainer.createEl('p', {
+      text: 'Copy this link and open it manually in your browser to complete authentication',
+      cls: 'auth-link-explanation'
+    });
 
-    input.focus();
+    // Manual steps
+    const manualSteps = fallbackContent.createEl('div', { cls: 'auth-manual-steps' });
+    manualSteps.createEl('h4', { text: 'Manual Authentication Steps:' });
+    const stepsList = manualSteps.createEl('ol');
+    stepsList.createEl('li', { text: 'Click "Copy Login Link" above' });
+    stepsList.createEl('li', { text: 'Open the link in your browser' });
+    stepsList.createEl('li', { text: 'Sign in to Google and authorize access' });
+    stepsList.createEl('li', { text: 'Copy the authorization code from the success page' });
+    stepsList.createEl('li', { text: 'Paste it in the field above and click "Authenticate"' });
+
+    // Focus on input by default
+    setTimeout(() => codeInput.focus(), 100);
   }
 }

@@ -123,10 +123,8 @@ export class PluginAuthManager {
           error: 'No authentication credentials found',
           suggestions: [
             'Use the "Start Authentication" button in plugin settings',
-            'Make sure Client ID and Client Secret are configured first',
           ],
           nextSteps: [
-            'Configure Client ID and Client Secret in plugin settings',
             'Click "Start Authentication" to authenticate with Google',
             'Complete the browser authentication process',
           ],

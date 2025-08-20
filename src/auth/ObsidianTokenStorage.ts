@@ -30,8 +30,8 @@ export class ObsidianTokenStorage implements TokenStorage {
       const credentials = data[tokenKey];
 
       // Validate that we have the minimum required tokens
-      if (!credentials.access_token) {
-        console.log('Plugin tokens found but missing access_token');
+      if (!credentials.access_token || !credentials.refresh_token) {
+        console.log('Plugin tokens found but missing required fields (access_token or refresh_token)');
         return null;
       }
 
@@ -45,10 +45,22 @@ export class ObsidianTokenStorage implements TokenStorage {
 
   async save(credentials: Credentials): Promise<void> {
     try {
+      // Validate credentials before saving
+      if (!credentials.access_token || !credentials.refresh_token) {
+        throw new Error('Cannot save invalid credentials: missing access_token or refresh_token');
+      }
+
       let data = (await this.plugin.loadData()) || {};
       const tokenKey = this.getTokenKey();
 
-      data[tokenKey] = credentials;
+      // Ensure we're storing a clean credentials object
+      data[tokenKey] = {
+        access_token: credentials.access_token,
+        refresh_token: credentials.refresh_token,
+        token_type: credentials.token_type || 'Bearer',
+        scope: credentials.scope,
+        expiry_date: credentials.expiry_date,
+      };
 
       await this.plugin.saveData(data);
       console.log('Saved tokens to plugin data');
