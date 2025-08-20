@@ -56,3 +56,332 @@
   min-width: 24px !important;
   min-height: 24px !important;
 }
+
+/* Authentication Status Styles */
+.auth-status-section {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.auth-status-display {
+  padding: 12px;
+  border-radius: 6px;
+  margin-top: 12px;
+}
+
+.auth-status-display.authenticated {
+  background: var(--background-modifier-success-rgb);
+  border: 1px solid var(--color-green);
+}
+
+.auth-status-display.not-authenticated {
+  background: var(--background-modifier-error-rgb);
+  border: 1px solid var(--color-yellow);
+}
+
+.auth-status-display.error {
+  background: var(--background-modifier-error-rgb);
+  border: 1px solid var(--color-red);
+}
+
+.status-indicator {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.status-indicator.success {
+  color: var(--color-green);
+}
+
+.status-indicator.warning {
+  color: var(--color-yellow);
+}
+
+.status-indicator.error {
+  color: var(--color-red);
+}
+
+.status-message {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.status-message.error {
+  color: var(--text-error);
+}
+
+.next-steps {
+  margin-top: 12px;
+}
+
+.steps-title {
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-normal);
+}
+
+.next-steps ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.next-steps li {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* OAuth Configuration Styles */
+.oauth-description {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.oauth-description p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.oauth-description a {
+  color: var(--link-color);
+  text-decoration: underline;
+}
+
+/* Authentication Button Styles */
+.auth-button {
+  margin: 4px 8px 4px 0;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  transition: all 0.2s ease;
+}
+
+.auth-button:hover {
+  background: var(--interactive-hover);
+}
+
+.auth-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--background-secondary);
+}
+
+.auth-button.start {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.auth-button.start:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.auth-button.clear {
+  background: var(--color-red);
+  color: white;
+  border-color: var(--color-red);
+}
+
+.auth-button.clear:hover {
+  opacity: 0.9;
+}
+
+.auth-button.reauth {
+  background: var(--color-orange);
+  color: white;
+  border-color: var(--color-orange);
+}
+
+.auth-button.reauth:hover {
+  opacity: 0.9;
+}
+
+.auth-guidance {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-style: italic;
+}
+
+.auth-guidance.disabled {
+  color: var(--text-faint);
+}
+
+.auth-alternative {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  border-left: 3px solid var(--text-muted);
+}
+
+.auth-alternative p {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.auth-alternative code {
+  background: var(--background-primary-alt);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-accent);
+}
+
+.auth-error {
+  color: var(--text-error);
+  font-size: 12px;
+  padding: 8px;
+  background: var(--background-modifier-error-rgb);
+  border-radius: 4px;
+  border: 1px solid var(--color-red);
+}
+
+/* Authentication Modal Styles */
+.auth-instructions {
+  margin: 16px 0;
+}
+
+.auth-instructions p {
+  margin: 8px 0;
+  padding: 8px;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.auth-explanation {
+  margin: 16px 0;
+}
+
+.auth-explanation p {
+  margin: 8px 0;
+  color: var(--text-muted);
+}
+
+.auth-explanation ol {
+  padding-left: 20px;
+  margin: 12px 0;
+}
+
+.auth-explanation li {
+  margin: 6px 0;
+  color: var(--text-normal);
+}
+
+.auth-url-container {
+  margin: 16px 0;
+}
+
+.auth-url-container label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-normal);
+}
+
+.auth-url-display {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  resize: vertical;
+}
+
+.auth-code-container {
+  margin: 16px 0;
+}
+
+.auth-code-container label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-normal);
+}
+
+.auth-code-input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+}
+
+.auth-status {
+  margin: 12px 0;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.auth-status.processing {
+  background: var(--background-modifier-success-rgb);
+  color: var(--color-green);
+  border: 1px solid var(--color-green);
+}
+
+.auth-status.error {
+  background: var(--background-modifier-error-rgb);
+  color: var(--text-error);
+  border: 1px solid var(--color-red);
+}
+
+.modal-button-container {
+  margin-top: 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.modal-button-container button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  transition: all 0.2s ease;
+}
+
+.modal-button-container button:hover {
+  background: var(--interactive-hover);
+}
+
+.modal-button-container button.mod-cta {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.modal-button-container button.mod-cta:hover {
+  background: var(--interactive-accent-hover);
+}
