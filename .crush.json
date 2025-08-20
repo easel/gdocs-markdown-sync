@@ -1,0 +1,49 @@
+{
+  "providers": {
+    "lmstudio": {
+      "name": "LM Studio",
+      "base_url": "http://localhost:1234/v1/",
+      "type": "openai",
+      "models": [
+        {
+          "name": "GPT-OSS 120b",
+          "id": "openai/gpt-oss-120b",
+          "context_window": 128000,
+          "default_max_tokens": 20000
+        },
+        {
+          "name": "Qwen 3 30B",
+          "id": "qwen/qwen3-30b-a3b-2507",
+          "context_window": 256000,
+          "default_max_tokens": 20000
+        },
+        {
+          "name": "Qwen 3 Coder 30B",
+          "id": "qwen/qwen3-coder-30b",
+          "context_window": 256000,
+          "default_max_tokens": 20000
+        }
+      ]
+    },
+
+    "bragi": {
+      "name": "Bragi",
+      "base_url": "http://100.127.38.115:1234/v1/",
+      "type": "openai",
+      "models": [
+        {
+          "name": "Qwen 3 30B",
+          "id": "qwen/qwen3-30b-a3b-2507",
+          "context_window": 131073,
+          "default_max_tokens": 20000
+        },
+        {
+          "name": "Qwen 3 Coder 30B",
+          "id": "qwen/qwen3-coder-30b",
+          "context_window": 131072,
+          "default_max_tokens": 20000
+        }
+      ]
+    }
+  }
+}

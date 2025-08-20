@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build plugin and package
+        uses: docker://oven/bun:1.2.2-debian
+        with:
+          entrypoint: sh
+          args: -lc "set -euo pipefail; apt-get update && apt-get install -y --no-install-recommends zip git ca-certificates && rm -rf /var/lib/apt/lists/* && bun --version && bun install --frozen-lockfile || bun install && bun run build:plugin && (zip -j plugin.zip manifest.json dist/main.js styles.css || zip -j plugin.zip manifest.json dist/main.js) && ls -lh plugin.zip dist || true"
+
+      - name: Upload build artifacts (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            plugin.zip
+            dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            plugin.zip
+            dist/cli.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

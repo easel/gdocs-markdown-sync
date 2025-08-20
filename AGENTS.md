@@ -1,47 +1,48 @@
-# Repository Guidelines
+# Agent Guidelines
 
-This repository implements a small Go CLI that synchronizes Google Docs and local Markdown, guided by SPEC.md. Keep changes minimal, tested, and clearly justified.
+This repository implements a TypeScript CLI and an Obsidian plugin for synchronizing Google Docs with local Markdown. Keep changes minimal, tested, and clearly justified.
 
-## Project Structure & Module Organization
-- Expected layout:
-  - `/cmd/gdocs-markdown-sync`: CLI entrypoint.
-  - `/internal/drive`: Drive/Docs API access, appProperties helpers.
-  - `/internal/sync`: change detection, 3‑way merge, conflict policy.
-  - `/internal/fs`: file watching, front matter, hashing.
-  - `/docs`: local mirror of Google Docs (Markdown).
-  - `/testdata`: fixtures for API and import/export flows.
-- Reference behavior and edge cases in `SPEC.md`.
+## Project Structure
 
-## Build, Test, and Development Commands
-- `go mod tidy`: ensure/go resolve modules (when `go.mod` exists).
-- `go build ./cmd/gdocs-markdown-sync`: build the CLI.
-- `go run ./cmd/gdocs-markdown-sync --poll-interval 5s`: run from source.
-- `go test ./...`: run unit tests; `go test -cover ./...` for coverage.
-- Example run with env:
-  `GOOGLE_APPLICATION_CREDENTIALS=key.json DRIVE_FOLDER_ID=abc LOCAL_DIR=./docs go run ./cmd/gdocs-markdown-sync`.
+- `src/cli.ts`: CLI entrypoint (compiled to `src/cli.js`, exposed as `gdocs-markdown-sync`).
+- `src/main.ts`: Obsidian plugin entrypoint.
+- `src/drive/*`: Drive/Docs API client and appProperties helpers.
+- `src/fs/*`: front matter parsing/building and hashing.
+- `src/auth/*`: OAuth (PKCE for CLI; standard OAuth for plugin).
+- `scripts/auth-pkce.js`: helper to pre-seed tokens for tests.
 
-## Coding Style & Naming Conventions
-- Go 1.21+; format with `go fmt ./...` and check with `go vet ./...` before pushing.
-- Packages: short, lower-case; avoid stutter (e.g., `sync.Manager`, not `sync.SyncManager`).
-- Errors: wrap with `%w`; return sentinel errors from packages; no panics in library code.
-- Filenames: `snake_case_test.go` for tests; OS/arch suffixes when required.
+## Build, Test, and Run
 
-## Testing Guidelines
-- Use standard `testing` with table-driven tests.
-- Put file/HTTP fixtures under `/testdata` and keep them small.
-- Name tests `TestXxx`; add `ExampleXxx` for public APIs.
-- Target >80% coverage in `/internal/*` critical paths.
+- `bun install` then `bun run build` to compile TS.
+- CLI:
+  - Dev: `bun run cli -- <command> [flags]`
+  - Global (optional): `bun link` then `gdocs-markdown-sync <command> [flags]`
+- Plugin: build with `bun run build`, then copy `manifest.json` and `dist/main.js` into your vault’s `.obsidian/plugins/google-docs-sync/`.
+- Tests: `bun test`; integration tests: `bun run test:integration` after auth.
 
-## Commit & Pull Request Guidelines
-- Commits: imperative scope style, e.g., `sync: handle image assets` or `drive: retry on 429`.
-- PRs: include purpose, linked issue, and before/after when behavior changes.
-- Note changes to conflict policy, on-disk layout, or flags in the PR description.
+## Coding Style & Conventions
 
-## Security & Configuration Tips
-- Credentials: use `GOOGLE_APPLICATION_CREDENTIALS` (service-account JSON); never commit secrets.
-- Minimize OAuth scopes to required Drive/Docs read/write.
-- Common env/flags: `DRIVE_FOLDER_ID`, `LOCAL_DIR`, `--conflicts prefer-doc|prefer-md|merge`.
+- TypeScript 5+, Bun runtime.
+- Prefer small, focused modules; avoid stuttered names (e.g., `sync.Manager`, not `sync.SyncManager`).
+- Errors: throw Error with clear message; include cause where helpful.
+- Avoid side effects in library code; keep CLI I/O in `src/cli.ts`.
 
-## Architecture Overview
-- Two watchers: Drive changes (poll/changes API) and local FS.
-- Sync loop: export Docs→MD, import MD→Docs, store `revisionId`/`sha256` in appProperties/front matter for 3‑way merges.
+## CLI Interface
+
+- Commands: `auth`, `pull`, `push`, `sync`.
+- Flags:
+  - `--drive-folder-id` (env: `DRIVE_FOLDER_ID`)
+  - `--local-dir` (env: `LOCAL_DIR`)
+  - `--watch`, `--poll-interval <seconds>`
+  - `--conflicts prefer-doc|prefer-md|merge` (parsed; merge is experimental)
+
+## Security
+
+- Tokens saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`.
+- Minimal scopes: Drive/Docs read/write; do not log secrets.
+
+## Architecture Summary
+
+- Export Docs→Markdown and import Markdown→Docs.
+- Preserve state with YAML front matter (docId, revisionId, sha256) and Drive `appProperties`.
+- Poll for changes; conflict policy hook present in CLI and plugin (merge WIP).

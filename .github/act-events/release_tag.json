@@ -1,0 +1,12 @@
+{
+  "ref": "refs/tags/v0.0.1",
+  "before": "0000000000000000000000000000000000000000",
+  "after": "0000000000000000000000000000000000000000",
+  "repository": {
+    "full_name": "local/act-test",
+    "private": false
+  },
+  "pusher": {
+    "name": "local"
+  }
+}

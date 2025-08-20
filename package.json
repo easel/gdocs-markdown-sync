@@ -1,0 +1,57 @@
+{
+  "name": "gdocs-markdown-sync",
+  "version": "1.0.0",
+  "description": "Sync Google Docs with Markdown files - CLI and Obsidian plugin",
+  "type": "module",
+  "main": "main.js",
+  "bin": {
+    "gdocs-markdown-sync": "src/cli-fetch.ts"
+  },
+  "scripts": {
+    "prebuild": "bun run scripts/generate-version.ts",
+    "build": "bun build src/main.ts --outdir ./dist --external obsidian --target node",
+    "prebuild:plugin": "bun run scripts/generate-version.ts",
+    "build:plugin": "bun build src/plugin-main.ts --outdir ./dist --external obsidian --format cjs --target browser && cp manifest.json styles.css dist/",
+    "build:cli": "bun build src/cli-fetch.ts --outdir ./dist --target bun",
+    "dev": "bun --watch src/main.ts",
+    "test": "bun test",
+    "test:unit": "bun test src/unit.test.ts src/error-handling.test.ts src/auth/auth.test.ts src/cli_utils.test.ts src/yaml-parsing.test.ts src/deps.test.ts src/real-implementation.test.ts src/fs/ignore.test.ts src/fs/frontmatter.test.ts src/main.test.ts",
+    "test:integration": "RUN_INTEGRATION_TESTS=true bun test src/integration.test.ts",
+    "test:coverage": "bun test --coverage",
+    "auth:pkce": "bun run scripts/auth-pkce.js",
+    "cli": "bun run src/cli-fetch.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "bun run typecheck && bun run lint && bun run test:coverage && bun run format:check"
+  },
+  "keywords": [
+    "google-docs",
+    "markdown",
+    "obsidian",
+    "sync",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.2",
+    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.23",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "bun-types": "^1.2.20",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "globals": "^15",
+    "obsidian": "^1.0.0",
+    "prettier": "^3.3.3"
+  }
+}
