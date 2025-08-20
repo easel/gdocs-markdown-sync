@@ -14,6 +14,15 @@ export interface DriveDocument {
   relativePath?: string;
 }
 
+export interface GoogleDocInfo {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+  relativePath: string; // Path relative to the base Drive folder
+  parentId: string;
+  webViewLink?: string;
+}
+
 export type AuthHeaders = Record<string, string>;
 
 export class DriveAPI {
@@ -604,4 +613,8 @@ export class DriveAPI {
       }
     }, context)();
   }
+
+
+
+
 }

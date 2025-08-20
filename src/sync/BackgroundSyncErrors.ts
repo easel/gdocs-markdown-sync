@@ -238,7 +238,7 @@ export class SyncErrorClassifier {
           requiresAuth: true,
           backoffMultiplier: 1,
           maxRetries: 0,
-          userFriendlyMessage: 'Authentication expired. Please re-authenticate in settings.',
+          userFriendlyMessage: 'Authentication expired. Please re-authenticate in plugin settings.',
         };
 
       case SyncErrorType.AUTH_INVALID:

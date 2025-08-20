@@ -1,5 +1,6 @@
 import { BrowserTokenLoader, Credentials } from './BrowserTokenLoader';
 import { ObsidianTokenStorage } from './ObsidianTokenStorage';
+import { UnifiedOAuthManager } from './UnifiedOAuthManager';
 
 export interface AuthStatusResult {
   isAuthenticated: boolean;
@@ -66,11 +67,19 @@ export class PluginAuthManager {
       );
     }
 
-    // Check if credentials are expired
+    // Check if credentials are expired and attempt refresh
     if (this.tokenLoader.isTokenExpired(this.currentCredentials)) {
-      throw new Error(
-        'Authentication expired. Please re-authenticate using the plugin settings or CLI.',
-      );
+      console.log('Access token expired, attempting refresh...');
+      try {
+        // Attempt to refresh the token
+        this.currentCredentials = await this.refreshExpiredToken(this.currentCredentials);
+        console.log('Successfully refreshed expired token');
+      } catch (refreshError) {
+        console.error('Token refresh failed:', refreshError);
+        throw new Error(
+          'Authentication expired and token refresh failed. Please re-authenticate in plugin settings.',
+        );
+      }
     }
 
     return this.currentCredentials;
@@ -221,6 +230,32 @@ export class PluginAuthManager {
       } catch (error) {
         console.warn('Failed to clear plugin credentials:', error);
       }
+    }
+  }
+
+  /**
+   * Attempt to refresh expired access token using refresh token
+   */
+  private async refreshExpiredToken(credentials: Credentials): Promise<Credentials> {
+    if (!credentials.refresh_token) {
+      throw new Error('No refresh token available for token refresh');
+    }
+
+    // We need OAuth client settings for refresh - get them from plugin settings 
+    // This is a bit of a hack, but we need to access the plugin's OAuth settings
+    const oauthManager = new UnifiedOAuthManager();
+    
+    try {
+      const refreshedCredentials = await oauthManager.refreshTokens(credentials);
+      
+      // Save the refreshed credentials
+      if (this.pluginTokenStorage) {
+        await this.pluginTokenStorage.save(refreshedCredentials);
+      }
+      
+      return refreshedCredentials;
+    } catch (error) {
+      throw new Error(`Token refresh failed: ${(error as Error).message}`);
     }
   }
 }

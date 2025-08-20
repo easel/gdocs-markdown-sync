@@ -147,6 +147,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           });
       });
 
+
     // Advanced OAuth Configuration Section (at bottom, collapsed by default)
     const advancedHeader = containerEl.createEl('h3', { text: '▶ Advanced OAuth Configuration' });
     advancedHeader.style.cursor = 'pointer';

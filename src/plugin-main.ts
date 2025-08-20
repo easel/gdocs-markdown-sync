@@ -1,6 +1,7 @@
 import { Plugin, TFile, Notice, Menu, WorkspaceLeaf, MarkdownView, Modal } from 'obsidian';
 
 import { PluginAuthManager } from './auth/PluginAuthManager';
+import { DriveAPI, GoogleDocInfo } from './drive/DriveAPI';
 import { parseFrontMatter, buildFrontMatter } from './fs/frontmatter';
 import { GoogleDocsSyncSettingsTab } from './settings';
 import { SyncErrorClassifier } from './sync/BackgroundSyncErrors';
@@ -292,6 +293,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       callback: () => this.showSyncStatus(),
     });
 
+
     // Add context menu items
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file) => {
@@ -547,40 +549,100 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       const content = await this.app.vault.read(file);
       const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
 
-      // Validate preconditions
-      const validation = this.syncService.validateSyncPreconditions(content, frontmatter);
-      if (!validation.valid) {
-        notice.setMessage(`❌ ${validation.error}`);
-        setTimeout(() => notice.hide(), 5000);
-        return;
+      // Get authentication
+      const authClient = await this.authManager.getAuthClient();
+      const driveAPI = new DriveAPI(authClient.credentials.access_token);
+
+      notice.setMessage('Finding or creating Google Doc...');
+
+      // Find or create the Google Doc using folder-based strategy
+      const googleDocInfo = await this.findOrCreateGoogleDoc(file, driveAPI, frontmatter);
+      
+      if (!googleDocInfo) {
+        throw new Error('Failed to find or create Google Doc');
       }
 
-      // Get remote content (placeholder - needs actual implementation)
-      const remoteData = await this.getRemoteDocumentContent(frontmatter);
-      if (!remoteData) {
-        throw new Error('Could not fetch remote document');
+      // Update frontmatter with Google Doc information if not already linked
+      let updatedFrontmatter = frontmatter;
+      if (!frontmatter['google-doc-id'] || frontmatter['google-doc-id'] !== googleDocInfo.id) {
+        updatedFrontmatter = {
+          ...frontmatter,
+          'google-doc-id': googleDocInfo.id,
+          'google-doc-url': `https://docs.google.com/document/d/${googleDocInfo.id}/edit`,
+          'google-doc-title': googleDocInfo.name,
+        };
+        console.log(`Linked ${file.path} to Google Doc: ${googleDocInfo.id}`);
       }
+
+      notice.setMessage('Fetching remote content...');
+
+      // Get remote content
+      const remoteContent = await driveAPI.exportDocument(googleDocInfo.id);
+      const remoteRevision = await this.getDocumentRevision(googleDocInfo.id, driveAPI);
+
+      notice.setMessage('Performing intelligent sync...');
 
       // Perform intelligent sync with conflict resolution
       const syncResult = await this.syncService.syncDocument(
         markdown,
-        frontmatter,
-        remoteData.content,
-        remoteData.revisionId,
-        remoteData.modifiedTime,
+        updatedFrontmatter,
+        remoteContent,
+        remoteRevision,
+        new Date().toISOString(), // modifiedTime - could be improved
       );
 
       if (!syncResult.result.success) {
         throw new Error(syncResult.result.error || 'Sync failed');
       }
 
-      // Update local file if content changed
-      if (syncResult.updatedContent && syncResult.updatedFrontmatter) {
-        const updatedDocument = SyncUtils.buildMarkdownWithFrontmatter(
-          syncResult.updatedFrontmatter,
-          syncResult.updatedContent,
-        );
-        await this.app.vault.modify(file, updatedDocument);
+      // Apply changes based on sync result
+      let shouldUpdateLocal = false;
+      let shouldUpdateRemote = false;
+      let finalContent = content;
+
+      switch (syncResult.result.action) {
+        case 'pull':
+          // Update local file with remote content
+          finalContent = SyncUtils.buildMarkdownWithFrontmatter(
+            updatedFrontmatter,
+            syncResult.updatedContent || remoteContent,
+          );
+          shouldUpdateLocal = true;
+          break;
+
+        case 'push':
+          // Update remote doc with local content
+          shouldUpdateRemote = true;
+          finalContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
+          shouldUpdateLocal = updatedFrontmatter !== frontmatter; // Update local if frontmatter changed
+          break;
+
+        case 'merge':
+          // Apply merged content to both local and remote
+          finalContent = SyncUtils.buildMarkdownWithFrontmatter(
+            updatedFrontmatter,
+            syncResult.updatedContent || markdown,
+          );
+          shouldUpdateLocal = true;
+          shouldUpdateRemote = true;
+          break;
+
+        case 'no_change':
+          // Just update frontmatter if needed
+          finalContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
+          shouldUpdateLocal = updatedFrontmatter !== frontmatter;
+          break;
+      }
+
+      // Apply local changes
+      if (shouldUpdateLocal) {
+        await this.app.vault.modify(file, finalContent);
+      }
+
+      // Apply remote changes
+      if (shouldUpdateRemote) {
+        notice.setMessage('Updating Google Doc...');
+        await driveAPI.updateDocument(googleDocInfo.id, syncResult.updatedContent || markdown);
       }
 
       // Show appropriate feedback
@@ -680,6 +742,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         .setIcon('download')
         .onClick(() => this.pullAllDocs());
     });
+
 
     menu.addItem((item: any) => {
       item
@@ -1595,6 +1658,157 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
 
     new Notice(message, 15000);
+  }
+
+
+
+
+
+
+  /**
+   * Build markdown content with frontmatter
+   */
+  private buildMarkdownWithFrontmatter(frontmatter: any, content: string): string {
+    const yamlContent = Object.entries(frontmatter)
+      .map(([key, value]) => {
+        if (typeof value === 'string' && (value.includes('\n') || value.includes('"'))) {
+          return `${key}: "${value.replace(/"/g, '\\"')}"`;
+        }
+        return `${key}: ${value}`;
+      })
+      .join('\n');
+
+    return `---\n${yamlContent}\n---\n${content}`;
+  }
+
+  /**
+   * Find or create Google Doc using folder-based strategy
+   * Strategy:
+   * 1. If frontmatter has google-doc-id, verify it exists and return it
+   * 2. Otherwise, map local file path to Google Drive folder structure
+   * 3. Search for existing document by name in the target folder
+   * 4. If not found, create new document in the target folder
+   * 5. Link the document by updating frontmatter
+   */
+  private async findOrCreateGoogleDoc(
+    file: TFile, 
+    driveAPI: DriveAPI, 
+    frontmatter: any
+  ): Promise<GoogleDocInfo | null> {
+    try {
+      // Step 1: If already linked, verify the existing link
+      if (frontmatter['google-doc-id']) {
+        try {
+          const existingDoc = await driveAPI.getFile(frontmatter['google-doc-id']);
+          if (existingDoc) {
+            console.log(`File ${file.path} already linked to Google Doc: ${existingDoc.id}`);
+            return {
+              id: existingDoc.id,
+              name: existingDoc.name,
+              relativePath: file.path,
+              parentId: '', // Not needed for existing docs
+            };
+          }
+        } catch (error) {
+          console.warn(`Linked Google Doc ${frontmatter['google-doc-id']} not found, will create new one`);
+        }
+      }
+
+      // Step 2: Calculate target folder path in Google Drive
+      const targetPath = this.calculateGoogleDrivePath(file);
+      console.log(`Target Google Drive path for ${file.path}: ${targetPath}`);
+
+      // Step 3: Ensure the folder structure exists in Google Drive
+      const targetFolderId = await driveAPI.ensureNestedFolders(
+        targetPath.folderPath, 
+        this.settings.driveFolderId
+      );
+
+      // Step 4: Search for existing document by name in the target folder
+      const searchName = targetPath.documentName;
+      console.log(`Searching for document "${searchName}" in folder ${targetFolderId}`);
+      
+      const existingDocs = await driveAPI.listDocsInFolder(targetFolderId);
+      const existingDoc = existingDocs.find(doc => 
+        doc.name === searchName || 
+        doc.name === `${searchName}.md` ||
+        doc.name.replace(/\.md$/, '') === searchName
+      );
+
+      if (existingDoc) {
+        console.log(`Found existing Google Doc: ${existingDoc.id} (${existingDoc.name})`);
+        return {
+          id: existingDoc.id,
+          name: existingDoc.name,
+          relativePath: file.path,
+          parentId: targetFolderId,
+        };
+      }
+
+      // Step 5: Create new document if not found
+      console.log(`Creating new Google Doc "${searchName}" in folder ${targetFolderId}`);
+      const fileContent = await this.app.vault.read(file);
+      const { markdown } = SyncUtils.parseFrontMatter(fileContent);
+      
+      const newDoc = await driveAPI.uploadMarkdownAsDoc(searchName, markdown, targetFolderId);
+      console.log(`Created new Google Doc: ${newDoc.id} (${newDoc.name})`);
+
+      return {
+        id: newDoc.id,
+        name: newDoc.name,
+        relativePath: file.path,
+        parentId: targetFolderId,
+      };
+
+    } catch (error) {
+      console.error(`Failed to find or create Google Doc for ${file.path}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Calculate the target Google Drive path for a local file
+   * Maps vault file structure to Google Drive folder structure
+   */
+  private calculateGoogleDrivePath(file: TFile): { folderPath: string; documentName: string } {
+    let filePath = file.path;
+    
+    // Remove baseVaultFolder from the path if it exists
+    if (this.settings.baseVaultFolder) {
+      const baseFolder = this.settings.baseVaultFolder.replace(/\/$/, ''); // Remove trailing slash
+      if (filePath.startsWith(baseFolder + '/')) {
+        filePath = filePath.substring(baseFolder.length + 1);
+      }
+    }
+
+    // Split into folder path and filename
+    const pathParts = filePath.split('/');
+    const fileName = pathParts.pop() || file.name;
+    const folderPath = pathParts.join('/');
+
+    // Convert filename to document name (remove .md extension)
+    let documentName = fileName.replace(/\.md$/, '');
+    
+    // Convert underscores to spaces for Google Docs naming convention
+    documentName = documentName.replace(/_/g, ' ');
+
+    return {
+      folderPath: folderPath || '', // Empty string means root of Drive folder
+      documentName,
+    };
+  }
+
+  /**
+   * Get document revision information
+   */
+  private async getDocumentRevision(docId: string, driveAPI: DriveAPI): Promise<string> {
+    try {
+      const fileInfo = await driveAPI.getFile(docId);
+      return fileInfo.modifiedTime || '';
+    } catch (error) {
+      console.warn(`Failed to get revision for doc ${docId}:`, error);
+      return '';
+    }
   }
 }
 
