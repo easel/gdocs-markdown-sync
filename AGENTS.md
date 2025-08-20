@@ -47,6 +47,8 @@ bun run test:integration      # Integration tests (requires auth)
 
 ### Plugin Deployment
 
+**IMPORTANT: Plugin directory name is `google-docs-sync` (from manifest.json ID)**
+
 ```bash
 # Build and package plugin for distribution
 bun run package:plugin
@@ -54,7 +56,8 @@ bun run package:plugin
 
 # For development: Manual installation
 bun run build:plugin
-# Copy dist/main.js + dist/manifest.json + dist/styles.css to vault/.obsidian/plugins/google-docs-sync/
+# Copy dist/* to vault/.obsidian/plugins/google-docs-sync/
+# Note: plugin.js gets renamed to main.js during build
 ```
 
 ## CLI Interface

@@ -33,65 +33,91 @@ export class SyncUtils {
   }
 
   /**
-   * Parse frontmatter from markdown content
+   * Parse frontmatter from markdown content using proper YAML parsing
    */
   static parseFrontMatter(content: string): { frontmatter: FrontMatter; markdown: string } {
-    const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
-    const match = content.match(frontmatterRegex);
+    // Use gray-matter for proper YAML parsing that preserves complex structures
+    const matter = require('gray-matter');
+    try {
+      const result = matter(content);
+      return { 
+        frontmatter: result.data || {}, 
+        markdown: result.content || content 
+      };
+    } catch (error) {
+      console.error('Failed to parse frontmatter with gray-matter, using fallback:', error);
+      
+      // Fallback to simple parsing only if gray-matter fails
+      const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
+      const match = content.match(frontmatterRegex);
 
-    if (!match) {
-      return { frontmatter: {}, markdown: content };
-    }
-
-    const frontmatterText = match[1];
-    const markdown = match[2];
-    const frontmatter: FrontMatter = {};
-
-    // Simple YAML parsing (basic key: value pairs)
-    const lines = frontmatterText.split('\n');
-    for (const line of lines) {
-      const colonIndex = line.indexOf(':');
-      if (colonIndex > 0) {
-        const key = line.substring(0, colonIndex).trim();
-        let value = line.substring(colonIndex + 1).trim();
-
-        // Remove quotes if present
-        if (
-          (value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))
-        ) {
-          value = value.slice(1, -1);
-        }
-
-        frontmatter[key] = value;
+      if (!match) {
+        return { frontmatter: {}, markdown: content };
       }
-    }
 
-    return { frontmatter, markdown };
+      const frontmatterText = match[1];
+      const markdown = match[2];
+      const frontmatter: FrontMatter = {};
+
+      // Simple YAML parsing (basic key: value pairs only - loses nested structures)
+      console.warn('Using fallback YAML parser - complex YAML structures may be lost');
+      const lines = frontmatterText.split('\n');
+      for (const line of lines) {
+        const colonIndex = line.indexOf(':');
+        if (colonIndex > 0) {
+          const key = line.substring(0, colonIndex).trim();
+          let value = line.substring(colonIndex + 1).trim();
+
+          // Remove quotes if present
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          }
+
+          frontmatter[key] = value;
+        }
+      }
+
+      return { frontmatter, markdown };
+    }
   }
 
   /**
    * Build markdown content with frontmatter
    */
   static buildMarkdownWithFrontmatter(frontmatter: FrontMatter, content: string): string {
-    const yamlLines = [];
-    yamlLines.push('---');
-
-    for (const [key, value] of Object.entries(frontmatter)) {
-      if (value !== null && value !== undefined) {
-        // Simple YAML serialization
-        if (typeof value === 'string' && (value.includes(':') || value.includes('\n'))) {
-          yamlLines.push(`${key}: "${value.replace(/"/g, '\\"')}"`);
-        } else {
-          yamlLines.push(`${key}: ${value}`);
-        }
-      }
+    // Don't add frontmatter if it's empty
+    if (!frontmatter || Object.keys(frontmatter).length === 0) {
+      return content;
     }
 
-    yamlLines.push('---');
-    yamlLines.push('');
-
-    return yamlLines.join('\n') + content;
+    // Use js-yaml for proper YAML serialization to preserve complex structures
+    const yaml = require('js-yaml');
+    try {
+      const yamlString = yaml.dump(frontmatter, {
+        lineWidth: -1, // Don't wrap long lines
+        noRefs: true,  // Don't use references
+        quotingType: '"', // Use double quotes only when necessary
+        forceQuotes: false, // Only quote when necessary
+      });
+      
+      return `---\n${yamlString}---\n\n${content}`;
+    } catch (error) {
+      console.error('Failed to serialize frontmatter with js-yaml, falling back to simple serialization:', error);
+      
+      // Fallback to simple serialization
+      const yamlLines = ['---'];
+      for (const [key, value] of Object.entries(frontmatter)) {
+        if (value !== null && value !== undefined) {
+          yamlLines.push(`${key}: ${JSON.stringify(value)}`);
+        }
+      }
+      yamlLines.push('---', '');
+      
+      return yamlLines.join('\n') + content;
+    }
   }
 
   /**

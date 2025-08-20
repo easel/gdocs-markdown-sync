@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 
 import type GoogleDocsSyncPlugin from './plugin-main';
+import { getBuildVersion } from './version';
 
 export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
   plugin: GoogleDocsSyncPlugin;
@@ -19,7 +20,14 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
 
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: 'Google Docs Sync Settings' });
+    // Plugin header with version
+    const headerEl = containerEl.createEl('div', { cls: 'google-docs-sync-header' });
+    const titleContainer = headerEl.createEl('div', { cls: 'google-docs-sync-title-container' });
+    titleContainer.createEl('h2', { text: 'Google Docs Sync Settings' });
+    const versionEl = titleContainer.createEl('span', { 
+      cls: 'google-docs-sync-version',
+      text: `v${getBuildVersion()}`
+    });
 
     // Authentication Status & Controls (consolidated at top)
     await this.displayAuthenticationStatus(containerEl);
@@ -75,7 +83,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       .setDesc('Automatically sync documents in the background')
       .addToggle((toggle) =>
         toggle
-          .setValue(this.plugin.settings.backgroundSyncEnabled !== false)
+          .setValue(this.plugin.settings.backgroundSyncEnabled === true)
           .onChange(async (value) => {
             this.plugin.settings.backgroundSyncEnabled = value;
             await this.plugin.saveSettings();
@@ -129,16 +137,16 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       .addButton((button) =>
         button
           .setButtonText('Sync Now')
-          .setTooltip('Force background sync to run immediately')
+          .setTooltip('Sync all documents (bidirectional)')
           .setCta()
           .onClick(async () => {
-            await this.plugin.forceBackgroundSync();
+            await this.plugin.syncAllDocuments();
             // Update display after a moment
             setTimeout(() => this.updateSyncStatusDisplay(statusEl), 1000);
           }),
       )
       .addButton((button) => {
-        const isEnabled = this.plugin.settings.backgroundSyncEnabled !== false;
+        const isEnabled = this.plugin.settings.backgroundSyncEnabled === true;
         return button
           .setButtonText(isEnabled ? 'Disable' : 'Enable')
           .setTooltip(`${isEnabled ? 'Disable' : 'Enable'} background sync`)

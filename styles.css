@@ -1,5 +1,33 @@
 /* Google Docs Sync Plugin Styles */
 
+/* Settings header styling */
+.google-docs-sync-header {
+  margin-bottom: 20px;
+}
+
+.google-docs-sync-title-container {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+
+.google-docs-sync-title-container h2 {
+  margin: 0;
+  flex-grow: 1;
+}
+
+.google-docs-sync-version {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-left: 16px;
+  padding: 2px 8px;
+  background: var(--background-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--background-modifier-border);
+}
+
 /* Sync animation */
 @keyframes spin {
   from {

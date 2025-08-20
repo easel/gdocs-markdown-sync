@@ -234,7 +234,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       this.syncService,
       this.settings,
       {
-        enabled: this.settings.backgroundSyncEnabled !== false,
+        enabled: this.settings.backgroundSyncEnabled === true,
         silentMode: this.settings.backgroundSyncSilentMode === true,
       },
     );
@@ -244,7 +244,13 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     this.statusBarItem.setText('Google Docs Sync');
     this.statusBarItem.addClass('google-docs-status');
     this.statusBarItem.onClickEvent(async () => {
-      await this.showSyncMenu();
+      console.log('🖱️ Status bar clicked, starting sync...');
+      try {
+        await this.syncAllDocuments();
+      } catch (error) {
+        console.error('❌ Sync failed:', error);
+        new Notice(`Sync failed: ${error.message}`);
+      }
     });
 
     // Connect status bar to sync status manager
@@ -285,6 +291,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       id: 'force-background-sync',
       name: 'Force background sync now',
       callback: () => this.forceBackgroundSync(),
+    });
+
+    this.addCommand({
+      id: 'sync-all-documents',
+      name: 'Sync all documents (bidirectional)',
+      callback: () => this.syncAllDocuments(),
     });
 
     this.addCommand({
@@ -386,7 +398,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     });
 
     // Start background sync
-    if (this.settings.backgroundSyncEnabled !== false) {
+    if (this.settings.backgroundSyncEnabled === true) {
       this.backgroundSyncManager.start();
     }
 
@@ -416,7 +428,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       baseVaultFolder: '',
       conflictPolicy: 'last-write-wins',
       pollInterval: 60,
-      backgroundSyncEnabled: true,
+      backgroundSyncEnabled: false,
       backgroundSyncSilentMode: false,
       // Public OAuth Client - Intentionally committed for desktop/plugin use
       // gitleaks:allow
@@ -445,7 +457,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Update background sync manager settings
     if (this.backgroundSyncManager) {
       this.backgroundSyncManager.updateSettings(this.settings, {
-        enabled: this.settings.backgroundSyncEnabled !== false,
+        enabled: this.settings.backgroundSyncEnabled === true,
         silentMode: this.settings.backgroundSyncSilentMode === true,
       });
     }
@@ -542,7 +554,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   async performSmartSync(file: TFile): Promise<void> {
-    const notice = new Notice('Syncing...', 0);
+    // No notice for individual file sync - status bar shows progress
 
     try {
       // Get current file content and metadata
@@ -552,8 +564,6 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       // Get authentication
       const authClient = await this.authManager.getAuthClient();
       const driveAPI = new DriveAPI(authClient.credentials.access_token);
-
-      notice.setMessage('Finding or creating Google Doc...');
 
       // Find or create the Google Doc using folder-based strategy
       const googleDocInfo = await this.findOrCreateGoogleDoc(file, driveAPI, frontmatter);
@@ -570,17 +580,16 @@ export default class GoogleDocsSyncPlugin extends Plugin {
           'google-doc-id': googleDocInfo.id,
           'google-doc-url': `https://docs.google.com/document/d/${googleDocInfo.id}/edit`,
           'google-doc-title': googleDocInfo.name,
+          'last-synced': new Date().toISOString(),
         };
         console.log(`Linked ${file.path} to Google Doc: ${googleDocInfo.id}`);
       }
-
-      notice.setMessage('Fetching remote content...');
 
       // Get remote content
       const remoteContent = await driveAPI.exportDocument(googleDocInfo.id);
       const remoteRevision = await this.getDocumentRevision(googleDocInfo.id, driveAPI);
 
-      notice.setMessage('Performing intelligent sync...');
+      // Status shown in status bar, no popup notice
 
       // Get actual file modification time
       const fileStats = await this.app.vault.adapter.stat(file.path);
@@ -639,29 +648,28 @@ export default class GoogleDocsSyncPlugin extends Plugin {
           break;
       }
 
+      // Check if we need to update frontmatter (for newly linked docs)
+      const frontmatterChanged = JSON.stringify(updatedFrontmatter) !== JSON.stringify(frontmatter);
+      
       // Apply local changes
-      if (shouldUpdateLocal) {
+      if (shouldUpdateLocal || frontmatterChanged) {
+        if (frontmatterChanged && !shouldUpdateLocal) {
+          // Just update frontmatter, keep existing content
+          finalContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
+        }
         await this.app.vault.modify(file, finalContent);
+        console.log(`📝 Updated local file: ${file.path}`);
       }
 
       // Apply remote changes
       if (shouldUpdateRemote) {
-        notice.setMessage('Updating Google Doc...');
         await driveAPI.updateDocument(googleDocInfo.id, syncResult.updatedContent || markdown);
       }
 
-      // Show appropriate feedback
-      const summary = this.syncService.generateSyncSummary(syncResult.result);
-      notice.setMessage(summary);
-
-      // Show conflict markers if manual resolution needed
+      // Log conflict markers for debugging (removed intrusive popup)
       if (syncResult.result.conflictMarkers && syncResult.result.conflictMarkers.length > 0) {
-        const conflictNotice = new Notice('', 10000);
-        const markers = syncResult.result.conflictMarkers.join('\n• ');
-        conflictNotice.setMessage(`Conflict Resolution:\n• ${markers}`);
+        console.log('Sync conflicts detected:', syncResult.result.conflictMarkers);
       }
-
-      setTimeout(() => notice.hide(), 3000);
 
       // Update header action
       const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -674,8 +682,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         resourceName: file.name,
         filePath: file.path,
       });
-      notice.setMessage(`❌ Sync failed: ${normalizedError.message}`);
-      setTimeout(() => notice.hide(), 5000);
+      // Only show notice for sync errors
+      new Notice(`❌ Sync failed: ${normalizedError.message}`, 5000);
       console.error('Smart sync failed:', normalizedError);
     }
   }
@@ -714,25 +722,102 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
   }
 
-  async showSyncMenu() {
+  private syncCancelled = false;
+
+  async syncAllDocuments() {
+    console.log('🔄 Starting syncAllDocuments()');
+    this.syncCancelled = false;
+    
+    // Test authentication first
+    try {
+      console.log('🔐 Testing authentication...');
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      console.log('✅ Authentication successful');
+    } catch (error) {
+      console.error('❌ Authentication failed:', error);
+      new Notice(`Authentication failed: ${error.message}`);
+      return;
+    }
+    
     const files = this.app.vault.getMarkdownFiles();
-    let pushCount = 0;
-    let pullCount = 0;
+    
+    let syncCount = 0;
+    let createCount = 0;
+    let updateCount = 0;
+    let errorCount = 0;
+
+    console.log(`📁 Found ${files.length} markdown files to process`);
+    
+    // Use only status bar for progress
+    this.statusBarItem.setText(`Syncing 0/${files.length}...`);
 
     for (const file of files) {
-      const syncState = await this.changeDetector.detectChanges(file);
-      if (syncState.hasLocalChanges) pushCount++;
-      if (syncState.hasRemoteChanges) pullCount++;
+      // Check for cancellation
+      if (this.syncCancelled) {
+        console.log('🛑 Sync cancelled by user');
+        return;
+      }
+
+      try {
+        // Update status bar with progress (only progress indicator)  
+        this.statusBarItem.setText(`Syncing ${syncCount + 1}/${files.length}...`);
+        
+        // Check if file has Google Drive metadata
+        const metadata = await this.getGoogleDocsMetadata(file);
+        
+        if (!metadata) {
+          // File not linked to Google Drive - create new doc
+          console.log(`Creating new Google Doc for ${file.path}`);
+          await this.performSmartSync(file);
+          createCount++;
+          syncCount++;
+        } else {
+          // File linked to Google Drive - check for changes
+          const syncState = await this.changeDetector.detectChanges(file);
+          
+          if (syncState.hasLocalChanges || syncState.hasRemoteChanges) {
+            console.log(`Syncing changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
+            await this.performSmartSync(file);
+            updateCount++;
+            syncCount++;
+          } else {
+            console.log(`No changes detected for ${file.path}`);
+          }
+        }
+      } catch (error) {
+        errorCount++;
+        console.error(`Failed to sync ${file.path}:`, error);
+      }
     }
 
-    // Update status bar text
-    this.statusBarItem.setText(`Google Docs: ${pushCount} to push, ${pullCount} to pull`);
+    // Update status bar with final result
+    const totalFiles = files.length;
+    this.statusBarItem.setText(`Google Docs: ${syncCount}/${totalFiles} synced`);
 
-    new Notice(`Sync status: ${pushCount} to push, ${pullCount} to pull`);
+    // Show brief completion notice only
+    if (errorCount > 0) {
+      new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`, 3000);
+    } else {
+      new Notice(`Sync completed: ${createCount} created, ${updateCount} updated`, 2000);
+    }
+    
+    console.log(`✅ Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`);
+    
+    // Restore original status bar handler
+    this.statusBarItem.onClickEvent(originalHandler);
   }
 
   showStatusBarMenu(evt: MouseEvent): void {
     const menu = new Menu();
+
+    menu.addItem((item: any) => {
+      item
+        .setTitle('Sync all documents (bidirectional)')
+        .setIcon('sync')
+        .onClick(() => this.syncAllDocuments());
+    });
+
+    menu.addSeparator();
 
     menu.addItem((item: any) => {
       item
@@ -747,7 +832,6 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         .setIcon('download')
         .onClick(() => this.pullAllDocs());
     });
-
 
     menu.addItem((item: any) => {
       item
@@ -1071,11 +1155,44 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
   }
 
+  async getAuthenticatedDriveAPI(): Promise<DriveAPI> {
+    console.log('🔐 Getting authenticated Drive API client...');
+    try {
+      const authClient = await this.authManager.getAuthClient();
+      console.log('✅ Auth client obtained, creating Drive API...');
+      return new DriveAPI(authClient.credentials.access_token);
+    } catch (error) {
+      console.error('❌ Failed to get authenticated Drive API:', error);
+      throw error;
+    }
+  }
+
   // Placeholder methods for Google Drive API integration
   async hasRemoteChanges(docId: string, lastSynced: string): Promise<boolean> {
-    // TODO: Implement actual Google Drive API call
-    console.log(`Checking remote changes for doc ${docId} since ${lastSynced}`);
-    return false;
+    try {
+      // Get authenticated Drive API client
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      // Get file info from Drive
+      const fileInfo = await driveAPI.getFile(docId);
+      if (!fileInfo) {
+        console.log(`Document ${docId} not found in Google Drive`);
+        return false;
+      }
+      
+      // Check if remote file was modified after last sync
+      const remoteModified = new Date(fileInfo.modifiedTime);
+      const lastSyncTime = new Date(lastSynced);
+      
+      const hasChanges = remoteModified > lastSyncTime;
+      console.log(`Remote changes for ${docId}: ${hasChanges} (remote: ${remoteModified.toISOString()}, lastSync: ${lastSyncTime.toISOString()})`);
+      
+      return hasChanges;
+    } catch (error) {
+      console.error(`Failed to check remote changes for ${docId}:`, error);
+      // If we can't check, assume no changes to avoid unnecessary sync attempts
+      return false;
+    }
   }
 
   async getRemoteDocumentContent(frontmatter: FrontMatter): Promise<{
@@ -1591,7 +1708,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    * Toggle background sync on/off
    */
   async toggleBackgroundSync(): Promise<void> {
-    const currentlyEnabled = this.settings.backgroundSyncEnabled !== false;
+    const currentlyEnabled = this.settings.backgroundSyncEnabled === true;
     this.settings.backgroundSyncEnabled = !currentlyEnabled;
     await this.saveSettings();
 
@@ -1601,7 +1718,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Update status immediately
     this.syncStatusManager.updateFromBackgroundState(
       this.backgroundSyncManager.getSyncStatus() as any,
-      this.settings.backgroundSyncEnabled !== false,
+      this.settings.backgroundSyncEnabled === true,
     );
   }
 
@@ -1609,7 +1726,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    * Force background sync to run immediately
    */
   async forceBackgroundSync(): Promise<void> {
-    if (this.settings.backgroundSyncEnabled === false) {
+    if (this.settings.backgroundSyncEnabled !== true) {
       new Notice('Background sync is disabled. Enable it in settings first.', 5000);
       return;
     }
