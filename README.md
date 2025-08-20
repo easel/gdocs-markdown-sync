@@ -23,56 +23,64 @@ This project provides a **unified TypeScript codebase** that powers both:
 
 Both use the **same PKCE OAuth flow** for secure authentication without exposing client secrets.
 
-## Quick Start
+## Installation
 
-### 1. Install & Build
+### CLI Tool
+
+#### Option 1: Use with npx (Recommended)
 
 ```bash
-git clone <repo-url>
-cd gdocs-markdown-sync
-npm install
-npm run build
+npx gdocs-markdown-sync --help
 ```
 
-### 2. Authentication (One-time setup)
+#### Option 2: Install globally
+
+```bash
+npm install -g gdocs-markdown-sync
+gdocs-markdown-sync --help
+```
+
+### Obsidian Plugin
+
+#### Option 1: Download from GitHub Releases (Recommended)
+
+1. Go to the [Releases page](https://github.com/user/gdocs-markdown-sync/releases)
+2. Download `obsidian-google-docs-sync.zip` from the latest `plugin-v*` release
+3. Extract to your vault's `.obsidian/plugins/google-docs-sync/` directory
+4. Enable the plugin in Obsidian Settings → Community Plugins
+
+#### Option 2: Build from source
+
+See the [Development Setup](#development-setup) section below.
+
+## Quick Start
+
+### 1. Authentication (One-time setup)
 
 ```bash
 # Secure PKCE OAuth flow - no client secrets needed!
-npm run cli auth
+gdocs-markdown-sync auth
 ```
 
-### 3A. Use as CLI Tool
+### 2A. Use as CLI Tool
 
 ```bash
 # Pull Google Docs to local Markdown files
-npm run cli pull --drive-folder-id <folder-id> --local-dir ./docs
+gdocs-markdown-sync pull --drive-folder-id <folder-id> --local-dir ./docs
 
 # Push local Markdown files to Google Docs
-npm run cli push --drive-folder-id <folder-id> --local-dir ./docs
+gdocs-markdown-sync push --drive-folder-id <folder-id> --local-dir ./docs
 
 # Bidirectional sync
-npm run cli sync --drive-folder-id <folder-id> --local-dir ./docs
+gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs
 
 # Continuous sync (every 5 minutes)
-npm run cli sync --drive-folder-id <folder-id> --local-dir ./docs --watch
+gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --watch
 ```
 
-### 3B. Use as Obsidian Plugin
+### 2B. Use as Obsidian Plugin
 
-```bash
-# Build plugin bundle
-npm run build:plugin
-
-# Create plugin folder in your vault (example path)
-mkdir -p ~/.obsidian/plugins/google-docs-sync
-
-# Copy required files to the plugin folder root
-cp manifest.json ~/.obsidian/plugins/google-docs-sync/
-cp dist/main.js ~/.obsidian/plugins/google-docs-sync/main.js
-cp -n styles.css ~/.obsidian/plugins/google-docs-sync/  # optional
-```
-
-Then enable “Google Docs Sync” in Obsidian → Settings → Community Plugins.
+After installation (see above), enable "Google Docs Sync" in Obsidian → Settings → Community Plugins, then configure your Google Drive settings in the plugin settings.
 
 ## Commands Reference
 
@@ -138,18 +146,18 @@ The ignore functionality works with both the CLI tool and Obsidian plugin.
 ### Unit Tests (50+ tests)
 
 ```bash
-npm test              # All tests
-npm run test:unit     # Unit tests only
+bun test              # All tests
+bun run test:unit     # Unit tests only
 ```
 
 ### Integration Tests (Real Google Drive API)
 
 ```bash
 # First authenticate
-npm run cli auth
+gdocs-markdown-sync auth
 
 # Then run integration tests
-npm run test:integration
+bun run test:integration
 ```
 
 ## Security
@@ -158,6 +166,33 @@ npm run test:integration
 ✅ **Secure Token Storage**: Tokens saved locally in `~/.config/gdocs-markdown-sync/`  
 ✅ **Scoped Permissions**: Only requests necessary Google Drive/Docs permissions  
 ✅ **Local Operation**: No data sent to third-party servers
+
+## Development Setup
+
+For contributors or users who want to build from source:
+
+```bash
+git clone <repo-url>
+cd gdocs-markdown-sync
+bun install
+bun run build
+```
+
+### Development Commands
+
+```bash
+# Run all checks (typecheck, lint, test, format)
+bun run check
+
+# Build CLI
+bun run build:cli
+
+# Build Obsidian plugin
+bun run build:plugin
+
+# Run in development mode
+bun run dev
+```
 
 ## Development
 
@@ -188,7 +223,7 @@ src/
   - Configure an OAuth consent screen (External is fine); add your Google account to Test users.
 - CLI (PKCE):
   - No client secret required. Optionally set `GOOGLE_OAUTH_CLIENT_ID` to override the default public client ID.
-  - Run `npm run cli -- auth`. Tokens are saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`.
+  - Run `gdocs-markdown-sync auth`. Tokens are saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`.
 - Obsidian Plugin (OAuth):
   - Create a Desktop App OAuth client (Credentials → Create Credentials → OAuth client ID → Desktop App).
   - Enter the Client ID/Secret in the plugin settings, then click “Start Auth Flow”.
@@ -196,6 +231,28 @@ src/
   - redirect_uri_mismatch: ensure the Desktop App client type; loopback redirect is set programmatically.
   - access_denied/restricted scope: verify APIs enabled and consent screen configured.
   - 404/403 on files: ensure the signed-in account has access to the Drive folder and Docs.
+
+## Releases
+
+This project uses GitHub Actions to automatically publish releases:
+
+### Creating a CLI Release
+
+```bash
+git tag cli-v1.2.3
+git push origin cli-v1.2.3
+```
+
+This will automatically publish to npm and create a GitHub release.
+
+### Creating an Obsidian Plugin Release
+
+```bash
+git tag plugin-v1.2.3
+git push origin plugin-v1.2.3
+```
+
+This will create a GitHub release with the plugin zip file.
 
 ## Contributing
 

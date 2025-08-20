@@ -4,10 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+      - 'cli-v*'
+      - 'plugin-v*'
   workflow_dispatch:
 
 jobs:
-  build-release:
+  plugin-release:
+    if: startsWith(github.ref, 'refs/tags/plugin-v') || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,22 +20,131 @@ jobs:
         uses: docker://oven/bun:1.2.2-debian
         with:
           entrypoint: sh
-          args: -lc "set -euo pipefail; apt-get update && apt-get install -y --no-install-recommends zip git ca-certificates && rm -rf /var/lib/apt/lists/* && bun --version && bun install --frozen-lockfile || bun install && bun run build:plugin && (zip -j plugin.zip manifest.json dist/main.js styles.css || zip -j plugin.zip manifest.json dist/main.js) && ls -lh plugin.zip dist || true"
+          args: -lc "set -euo pipefail; apt-get update && apt-get install -y --no-install-recommends zip git ca-certificates && rm -rf /var/lib/apt/lists/* && bun --version && bun install --frozen-lockfile || bun install && bun run build:plugin && (zip -j obsidian-google-docs-sync.zip manifest.json dist/main.js styles.css || zip -j obsidian-google-docs-sync.zip manifest.json dist/main.js) && ls -lh obsidian-google-docs-sync.zip dist || true"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/plugin-v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/plugin-v}" >> $GITHUB_OUTPUT
+            echo "tag_type=plugin" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "tag_type=general" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload build artifacts (for debugging)
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts
+          name: plugin-build-artifacts
           path: |
-            plugin.zip
+            obsidian-google-docs-sync.zip
             dist
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            plugin.zip
-            dist/cli.js
+            obsidian-google-docs-sync.zip
+            dist/main.js
+            manifest.json
+            styles.css
+          tag_name: ${{ github.ref_name }}
+          name: Obsidian Plugin v${{ steps.version.outputs.version }}
+          body: |
+            ## Obsidian Plugin Release v${{ steps.version.outputs.version }}
+            
+            ### Installation
+            
+            1. Download `obsidian-google-docs-sync.zip` from this release
+            2. Extract the files to your Obsidian vault's `.obsidian/plugins/google-docs-sync/` directory
+            3. Enable the plugin in Obsidian's settings
+            
+            ### Files
+            - `obsidian-google-docs-sync.zip` - Complete plugin package
+            - `main.js` - Plugin code
+            - `manifest.json` - Plugin manifest
+            - `styles.css` - Plugin styles
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cli-release:
+    if: startsWith(github.ref, 'refs/tags/cli-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build and package CLI
+        uses: docker://oven/bun:1.2.2-debian
+        with:
+          entrypoint: sh
+          args: -lc "set -euo pipefail; apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* && bun --version && bun install --frozen-lockfile || bun install && bun run check && bun run build:cli"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/cli-v}" >> $GITHUB_OUTPUT
+
+      - name: Update package.json version
+        run: |
+          bun run -c "
+            const pkg = JSON.parse(await Bun.file('package.json').text());
+            pkg.version = '${{ steps.version.outputs.version }}';
+            await Bun.write('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Create CLI package
+        run: |
+          # Create a clean package for npm
+          mkdir -p npm-package
+          cp package.json npm-package/
+          cp README.md npm-package/
+          cp LICENSE npm-package/ 2>/dev/null || echo "LICENSE file not found, skipping"
+          cp -r dist npm-package/
+          
+          # Update bin path to point to built file
+          cd npm-package
+          sed -i 's|"gdocs-markdown-sync": "src/cli-fetch.ts"|"gdocs-markdown-sync": "dist/cli-fetch.js"|' package.json
+
+      - name: Publish to NPM
+        run: |
+          cd npm-package
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CLI v${{ steps.version.outputs.version }}
+          files: |
+            dist/cli-fetch.js
+          body: |
+            ## CLI Release v${{ steps.version.outputs.version }}
+            
+            ### Installation
+            
+            ```bash
+            npx gdocs-markdown-sync@${{ steps.version.outputs.version }}
+            ```
+            
+            Or install globally:
+            
+            ```bash
+            npm install -g gdocs-markdown-sync@${{ steps.version.outputs.version }}
+            ```
+            
+            ### Usage
+            
+            ```bash
+            gdocs-markdown-sync --help
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
