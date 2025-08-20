@@ -1,0 +1,81 @@
+# Google Docs Markdown Sync - Ignore File Example
+# Create a file named ".gdocs-sync-ignore" (without .example) in your vault root
+# Uses the same syntax as .gitignore
+
+# ================================
+# Obsidian System Files
+# ================================
+.obsidian/
+.trash/
+
+# ================================
+# Temporary and Backup Files
+# ================================
+*.tmp
+*~
+*.bak
+*.swp
+
+# ================================
+# Drafts and Work-in-Progress
+# ================================
+drafts/
+wip/
+scratch/
+
+# ================================
+# Templates (but keep main template)
+# ================================
+templates/
+!templates/main-template.md
+
+# ================================
+# Private and Personal Notes
+# ================================
+private/
+personal/
+*.private.md
+*.confidential.md
+
+# ================================
+# Development and Testing
+# ================================
+**/test/**
+**/tests/**
+**/*.test.md
+node_modules/
+.git/
+.vscode/
+
+# ================================
+# Logs and Debug Files
+# ================================
+**/*.log
+debug/
+logs/
+
+# ================================
+# Media and Assets (optional)
+# ================================
+# Uncomment if you don't want to sync images/media
+# *.png
+# *.jpg
+# *.gif
+# *.pdf
+# assets/
+# attachments/
+
+# ================================
+# Project-specific Patterns
+# ================================
+# Add your own patterns below:
+
+# Ignore daily notes from a specific year
+# daily/2023/
+
+# Ignore meeting notes older than current year
+# meetings/202[0-2]/
+
+# Ignore specific categories
+# archive/
+# old/

@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go test:*)",
+      "WebSearch",
+      "Bash(npm test:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run test:unit:*)",
+      "Bash(bun run:*)",
+      "Bash(bun test:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(git add:*)",
+      "Bash(bun install:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(node:*)",
+      "Bash(grep:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(rm:*)",
+      "Bash(node:*)",
+      "Bash(act:*)",
+      "Bash(mv:*)",
+      "Bash(git reset:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": [
+      "/Users/erik/.config/gdocs-markdown-sync"
+    ]
+  }
+}

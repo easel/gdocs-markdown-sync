@@ -1,0 +1,58 @@
+/* Google Docs Sync Plugin Styles */
+
+/* Sync animation */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status bar styling */
+.google-docs-status {
+  cursor: pointer;
+}
+
+.google-docs-status.disabled {
+  opacity: 0.6;
+}
+
+.google-docs-status.has-changes {
+  font-weight: bold;
+}
+
+.google-docs-status.up-to-date {
+  opacity: 0.8;
+}
+
+.google-docs-status.syncing {
+  color: var(--interactive-accent);
+}
+
+/* Ribbon icon sync status styles */
+.sync-none {
+  color: var(--text-muted);
+}
+
+.sync-local {
+  color: var(--text-accent); /* Blue for local changes */
+}
+
+.sync-remote {
+  color: var(--text-warning); /* Orange for remote changes */
+}
+
+.sync-both {
+  color: var(--text-error); /* Red for conflicts */
+}
+
+/* Ensure ribbon icon is visible */
+.google-docs-ribbon-icon {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
+}

@@ -1,0 +1,21 @@
+name: ZAP Baseline (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target URL to scan (e.g., http://localhost:3000)'
+        required: true
+        type: string
+
+jobs:
+  zap_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ inputs.target }}
+          rules_file_name: '.zap/rules.tsv'
+          allow_issue_writing: false
+          fail_action: false
