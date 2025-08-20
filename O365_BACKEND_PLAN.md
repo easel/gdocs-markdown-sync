@@ -12,6 +12,7 @@ Scope: CLI and Obsidian plugin (shared core)
 - Provide bidirectional sync using a DOCX-based, lossy roundtrip with clear conflict handling.
 
 Non-goals (initially)
+
 - Perfect fidelity with complex Word features (tracked changes, comments, advanced tables/styles).
 - Merging changes inside DOCX; “merge” policy applies only to pure Markdown remotes.
 - Image extraction on pull (planned for Phase 2).
@@ -103,11 +104,11 @@ Non-goals (initially)
 
 ## Rollout / Milestones
 
-1) Milestone 1 — Core DOCX sync
+1. Milestone 1 — Core DOCX sync
    - PKCE auth, OneDrive + SharePoint uploads, eTag checks, open extension metadata, multiple remotes in front matter.
-2) Milestone 2 — Images & robustness
+2. Milestone 2 — Images & robustness
    - Extract embedded images on pull to `assets/<note-id>/img-<n>.<ext>` and rewrite Markdown; large-upload sessions; more drift guards.
-3) Milestone 3 — Plugin settings/UI
+3. Milestone 3 — Plugin settings/UI
    - Add O365 backend settings and per-note remote management in the Obsidian plugin.
 
 ## Open Choices

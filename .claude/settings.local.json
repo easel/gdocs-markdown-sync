@@ -23,7 +23,9 @@
       "Bash(node:*)",
       "Bash(act:*)",
       "Bash(mv:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
     ],
     "deny": [],
     "ask": [],
