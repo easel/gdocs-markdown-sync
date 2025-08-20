@@ -614,7 +614,37 @@ export class DriveAPI {
     }, context)();
   }
 
+  /**
+   * PLUGIN COMPATIBILITY ALIASES
+   * These methods provide aliases for plugin compatibility
+   * Plugin calls these method names but they map to existing functionality
+   */
 
+  /**
+   * Alias for exportDocAsMarkdown() - called by plugin
+   */
+  async exportDocument(docId: string): Promise<string> {
+    return this.exportDocAsMarkdown(docId);
+  }
 
+  /**
+   * Alias for updateGoogleDoc() - called by plugin
+   */
+  async updateDocument(docId: string, content: string): Promise<void> {
+    return this.updateGoogleDoc(docId, content);
+  }
 
+  /**
+   * Alternative alias for exportDocAsMarkdown()
+   */
+  async exportDocMarkdown(docId: string): Promise<string> {
+    return this.exportDocAsMarkdown(docId);
+  }
+
+  /**
+   * Alternative alias for updateGoogleDoc()
+   */
+  async updateDocMarkdown(docId: string, content: string): Promise<void> {
+    return this.updateGoogleDoc(docId, content);
+  }
 }

@@ -426,7 +426,24 @@
 .sync-status-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
+}
+
+/* Sync section styling */
+.sync-section {
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.sync-section-title {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .sync-status-main {
@@ -498,6 +515,24 @@
   color: var(--text-muted);
   margin-top: 4px;
   font-style: italic;
+}
+
+/* Sync action buttons */
+.sync-cancel-button {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-red);
+  background: var(--color-red);
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.sync-cancel-button:hover {
+  opacity: 0.9;
 }
 
 /* Status bar sync states */

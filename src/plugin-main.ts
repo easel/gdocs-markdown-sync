@@ -723,122 +723,259 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   private syncCancelled = false;
+  private syncInProgress = false;
+  private currentSyncStatus = {
+    isRunning: false,
+    progress: { current: 0, total: 0 },
+    operation: '',
+    startTime: 0,
+  };
 
   async syncAllDocuments() {
+    // Check if sync is already in progress
+    if (this.syncInProgress) {
+      this.showSyncInProgressMenu();
+      return;
+    }
+
     console.log('🔄 Starting syncAllDocuments()');
     this.syncCancelled = false;
+    this.syncInProgress = true;
+    this.currentSyncStatus = {
+      isRunning: true,
+      progress: { current: 0, total: 0 },
+      operation: 'Starting sync...',
+      startTime: Date.now(),
+    };
     
-    // Test authentication first
     try {
+      // Test authentication first
       console.log('🔐 Testing authentication...');
       const driveAPI = await this.getAuthenticatedDriveAPI();
       console.log('✅ Authentication successful');
-    } catch (error) {
-      console.error('❌ Authentication failed:', error);
-      new Notice(`Authentication failed: ${error.message}`);
-      return;
-    }
-    
-    const files = this.app.vault.getMarkdownFiles();
-    
-    let syncCount = 0;
-    let createCount = 0;
-    let updateCount = 0;
-    let errorCount = 0;
+      
+      const files = this.app.vault.getMarkdownFiles();
+      
+      let syncCount = 0;
+      let createCount = 0;
+      let updateCount = 0;
+      let errorCount = 0;
 
-    console.log(`📁 Found ${files.length} markdown files to process`);
-    
-    // Use only status bar for progress
-    this.statusBarItem.setText(`Syncing 0/${files.length}...`);
+      console.log(`📁 Found ${files.length} markdown files to process`);
+      
+      // Update sync status
+      this.currentSyncStatus.progress.total = files.length;
+      this.currentSyncStatus.operation = 'Enumerating files';
+      
+      // Use only status bar for progress
+      this.statusBarItem.setText(`Syncing 0/${files.length}...`);
 
-    for (const file of files) {
-      // Check for cancellation
-      if (this.syncCancelled) {
-        console.log('🛑 Sync cancelled by user');
-        return;
-      }
+      for (const file of files) {
+        // Check for cancellation
+        if (this.syncCancelled) {
+          console.log('🛑 Sync cancelled by user');
+          break;
+        }
 
-      try {
-        // Update status bar with progress (only progress indicator)  
-        this.statusBarItem.setText(`Syncing ${syncCount + 1}/${files.length}...`);
-        
-        // Check if file has Google Drive metadata
-        const metadata = await this.getGoogleDocsMetadata(file);
-        
-        if (!metadata) {
-          // File not linked to Google Drive - create new doc
-          console.log(`Creating new Google Doc for ${file.path}`);
-          await this.performSmartSync(file);
-          createCount++;
-          syncCount++;
-        } else {
-          // File linked to Google Drive - check for changes
-          const syncState = await this.changeDetector.detectChanges(file);
+        try {
+          // Update status bar with progress (only progress indicator)  
+          this.statusBarItem.setText(`Syncing ${syncCount + 1}/${files.length}...`);
+          this.currentSyncStatus.progress.current = syncCount + 1;
+          this.currentSyncStatus.operation = `Syncing ${file.name}`;
           
-          if (syncState.hasLocalChanges || syncState.hasRemoteChanges) {
-            console.log(`Syncing changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
+          // Check if file has Google Drive metadata
+          const metadata = await this.getGoogleDocsMetadata(file);
+          
+          if (!metadata) {
+            // File not linked to Google Drive - create new doc
+            console.log(`Creating new Google Doc for ${file.path}`);
             await this.performSmartSync(file);
-            updateCount++;
+            createCount++;
             syncCount++;
           } else {
-            console.log(`No changes detected for ${file.path}`);
+            // File linked to Google Drive - check for changes
+            const syncState = await this.changeDetector.detectChanges(file);
+            
+            if (syncState.hasLocalChanges || syncState.hasRemoteChanges) {
+              console.log(`Syncing changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
+              await this.performSmartSync(file);
+              updateCount++;
+              syncCount++;
+            } else {
+              console.log(`No changes detected for ${file.path}`);
+            }
           }
+        } catch (error) {
+          errorCount++;
+          console.error(`Failed to sync ${file.path}:`, error);
         }
-      } catch (error) {
-        errorCount++;
-        console.error(`Failed to sync ${file.path}:`, error);
       }
-    }
 
-    // Update status bar with final result
-    const totalFiles = files.length;
-    this.statusBarItem.setText(`Google Docs: ${syncCount}/${totalFiles} synced`);
+      // Update status bar with final result
+      const totalFiles = files.length;
+      const statusMessage = this.syncCancelled ? 'cancelled' : 'synced';
+      this.statusBarItem.setText(`Google Docs: ${syncCount}/${totalFiles} ${statusMessage}`);
 
-    // Show brief completion notice only
-    if (errorCount > 0) {
-      new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`, 3000);
-    } else {
-      new Notice(`Sync completed: ${createCount} created, ${updateCount} updated`, 2000);
+      // Show brief completion notice only
+      if (this.syncCancelled) {
+        new Notice(`Sync cancelled: ${createCount} created, ${updateCount} updated`, 2000);
+      } else if (errorCount > 0) {
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`, 3000);
+      } else {
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated`, 2000);
+      }
+      
+      console.log(`✅ Sync ${this.syncCancelled ? 'cancelled' : 'completed'}: ${createCount} created, ${updateCount} updated, ${errorCount} errors`);
+      
+    } catch (error) {
+      console.error('❌ Sync failed:', error);
+      new Notice(`Sync failed: ${error.message}`);
+      this.statusBarItem.setText('Google Docs: sync failed');
+    } finally {
+      // Reset sync state
+      this.syncInProgress = false;
+      this.syncCancelled = false;
+      this.currentSyncStatus = {
+        isRunning: false,
+        progress: { current: 0, total: 0 },
+        operation: '',
+        startTime: 0,
+      };
     }
-    
-    console.log(`✅ Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`);
-    
-    // Restore original status bar handler
-    this.statusBarItem.onClickEvent(originalHandler);
   }
 
-  showStatusBarMenu(evt: MouseEvent): void {
+  showSyncInProgressMenu(): void {
     const menu = new Menu();
 
     menu.addItem((item: any) => {
       item
-        .setTitle('Sync all documents (bidirectional)')
-        .setIcon('sync')
-        .onClick(() => this.syncAllDocuments());
+        .setTitle('View sync status')
+        .setIcon('info')
+        .onClick(() => this.showCurrentSyncStatus());
+    });
+
+    menu.addItem((item: any) => {
+      item
+        .setTitle('Cancel sync')
+        .setIcon('stop-circle')
+        .onClick(() => this.cancelSync());
     });
 
     menu.addSeparator();
 
     menu.addItem((item: any) => {
       item
-        .setTitle('Push all documents')
-        .setIcon('upload')
-        .onClick(() => this.pushAllDocs());
+        .setTitle('Continue running')
+        .setIcon('play')
+        .onClick(() => {
+          // Just close the menu and let sync continue
+          new Notice('Sync will continue running...', 2000);
+        });
     });
 
-    menu.addItem((item: any) => {
-      item
-        .setTitle('Pull all documents')
-        .setIcon('download')
-        .onClick(() => this.pullAllDocs());
-    });
+    // Show menu at current mouse position or center of screen
+    const rect = this.statusBarItem.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.top });
+  }
 
-    menu.addItem((item: any) => {
-      item
-        .setTitle('Smart sync current document')
-        .setIcon('sync')
-        .onClick(() => this.smartSyncCurrentDoc());
-    });
+  showCurrentSyncStatus(): void {
+    if (!this.syncInProgress) {
+      new Notice('No sync operation currently running', 3000);
+      return;
+    }
+
+    const elapsed = Math.round((Date.now() - this.currentSyncStatus.startTime) / 1000);
+    const progress = this.currentSyncStatus.progress;
+    const percentComplete = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+
+    let message = `**Manual Sync in Progress**\n\n`;
+    message += `• Progress: ${progress.current}/${progress.total} files (${percentComplete}%)\n`;
+    message += `• Current Operation: ${this.currentSyncStatus.operation}\n`;
+    message += `• Elapsed Time: ${elapsed}s\n`;
+    message += `• Started: ${new Date(this.currentSyncStatus.startTime).toLocaleTimeString()}\n`;
+
+    if (progress.total > 0 && progress.current > 0) {
+      const avgTimePerFile = elapsed / progress.current;
+      const remainingFiles = progress.total - progress.current;
+      const estimatedTimeRemaining = Math.round(avgTimePerFile * remainingFiles);
+      
+      if (estimatedTimeRemaining > 0) {
+        message += `• Estimated Time Remaining: ${estimatedTimeRemaining}s\n`;
+      }
+    }
+
+    new Notice(message, 10000);
+  }
+
+  cancelSync(): void {
+    if (!this.syncInProgress) {
+      new Notice('No sync operation to cancel', 3000);
+      return;
+    }
+
+    this.syncCancelled = true;
+    new Notice('Sync cancellation requested...', 3000);
+    console.log('🛑 User requested sync cancellation');
+  }
+
+  showStatusBarMenu(evt: MouseEvent): void {
+    const menu = new Menu();
+
+    // Show different options based on sync status
+    if (this.syncInProgress) {
+      menu.addItem((item: any) => {
+        item
+          .setTitle('View sync status')
+          .setIcon('info')
+          .onClick(() => this.showCurrentSyncStatus());
+      });
+
+      menu.addItem((item: any) => {
+        item
+          .setTitle('Cancel sync')
+          .setIcon('stop-circle')
+          .onClick(() => this.cancelSync());
+      });
+    } else {
+      menu.addItem((item: any) => {
+        item
+          .setTitle('Sync all documents (bidirectional)')
+          .setIcon('sync')
+          .onClick(() => this.syncAllDocuments());
+      });
+
+      menu.addSeparator();
+
+      menu.addItem((item: any) => {
+        item
+          .setTitle('Push all documents')
+          .setIcon('upload')
+          .onClick(() => this.pushAllDocs());
+      });
+
+      menu.addItem((item: any) => {
+        item
+          .setTitle('Pull all documents')
+          .setIcon('download')
+          .onClick(() => this.pullAllDocs());
+      });
+
+      menu.addItem((item: any) => {
+        item
+          .setTitle('Smart sync current document')
+          .setIcon('sync')
+          .onClick(() => this.smartSyncCurrentDoc());
+      });
+
+      menu.addSeparator();
+
+      menu.addItem((item: any) => {
+        item
+          .setTitle('View sync status')
+          .setIcon('info')
+          .onClick(() => this.showSyncStatus());
+      });
+    }
 
     menu.showAtMouseEvent(evt);
   }
@@ -1776,6 +1913,19 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       message += `• Can Recover: ${currentStatus.errorInfo.canRecover ? 'Yes' : 'No'}\n`;
       if (currentStatus.errorInfo.userAction) {
         message += `• Action: ${currentStatus.errorInfo.userAction}\n`;
+      }
+    }
+
+    // Add manual sync status if running
+    if (this.syncInProgress) {
+      message += `\n\n**Manual Sync Status**\n`;
+      message += `• Running: Yes\n`;
+      message += `• Progress: ${this.currentSyncStatus.progress.current}/${this.currentSyncStatus.progress.total}\n`;
+      message += `• Current Operation: ${this.currentSyncStatus.operation}\n`;
+      
+      if (this.currentSyncStatus.startTime > 0) {
+        const elapsed = Math.round((Date.now() - this.currentSyncStatus.startTime) / 1000);
+        message += `• Elapsed Time: ${elapsed}s\n`;
       }
     }
 

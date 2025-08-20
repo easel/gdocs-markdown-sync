@@ -33,7 +33,11 @@
       "Bash(grep:*)",
       "Bash(node:*)",
       "Bash(bun:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(mv:*)"
     ],
     "deny": [],
     "ask": [],

@@ -420,8 +420,12 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
 
     const statusContainer = statusEl.createDiv({ cls: 'sync-status-container' });
 
+    // Background Sync Section
+    const backgroundSection = statusContainer.createDiv({ cls: 'sync-section' });
+    backgroundSection.createEl('h4', { text: 'Background Sync', cls: 'sync-section-title' });
+
     // Main status
-    const mainStatus = statusContainer.createDiv({ cls: 'sync-status-main' });
+    const mainStatus = backgroundSection.createDiv({ cls: 'sync-status-main' });
     const statusIcon = this.getStatusIcon(currentStatus.state);
     mainStatus.createSpan({
       text: `${statusIcon} ${currentStatus.message}`,
@@ -429,12 +433,12 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     });
 
     // Details
-    const details = statusContainer.createDiv({ cls: 'sync-status-details' });
+    const details = backgroundSection.createDiv({ cls: 'sync-status-details' });
     details.createSpan({ text: currentStatus.details, cls: 'sync-status-detail-text' });
 
     // Stats
     if (status.queuedCount > 0 || status.failedCount > 0 || status.lastSync) {
-      const stats = statusContainer.createDiv({ cls: 'sync-status-stats' });
+      const stats = backgroundSection.createDiv({ cls: 'sync-status-stats' });
 
       if (status.queuedCount > 0) {
         stats.createSpan({ text: `${status.queuedCount} queued`, cls: 'sync-stat-queued' });
@@ -452,7 +456,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
 
     // Error info
     if (currentStatus.errorInfo) {
-      const errorInfo = statusContainer.createDiv({ cls: 'sync-status-error-info' });
+      const errorInfo = backgroundSection.createDiv({ cls: 'sync-status-error-info' });
       errorInfo.createSpan({
         text: `⚠️ ${currentStatus.errorInfo.message}`,
         cls: 'sync-error-message',
@@ -464,6 +468,62 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           cls: 'sync-error-action',
         });
       }
+    }
+
+    // Manual Sync Section
+    const manualSection = statusContainer.createDiv({ cls: 'sync-section' });
+    manualSection.createEl('h4', { text: 'Manual Sync', cls: 'sync-section-title' });
+
+    const manualStatus = manualSection.createDiv({ cls: 'sync-status-main' });
+    
+    // Access manual sync status from plugin
+    const plugin = this.plugin as any;
+    if (plugin.syncInProgress && plugin.currentSyncStatus) {
+      const syncStatus = plugin.currentSyncStatus;
+      const progress = syncStatus.progress;
+      const percentComplete = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+      
+      manualStatus.createSpan({
+        text: `🔄 ${syncStatus.operation}`,
+        cls: 'sync-status-syncing',
+      });
+
+      const progressDetails = manualSection.createDiv({ cls: 'sync-status-details' });
+      progressDetails.createSpan({ 
+        text: `Progress: ${progress.current}/${progress.total} files (${percentComplete}%)`,
+        cls: 'sync-status-detail-text' 
+      });
+
+      if (syncStatus.startTime > 0) {
+        const elapsed = Math.round((Date.now() - syncStatus.startTime) / 1000);
+        const elapsedDetails = manualSection.createDiv({ cls: 'sync-status-details' });
+        elapsedDetails.createSpan({ 
+          text: `Running for ${elapsed}s`,
+          cls: 'sync-status-detail-text' 
+        });
+      }
+
+      // Add cancel button for manual sync
+      const cancelButton = manualSection.createEl('button', {
+        text: 'Cancel Sync',
+        cls: 'sync-cancel-button mod-warning',
+      });
+      cancelButton.onclick = () => {
+        plugin.cancelSync();
+        // Update display after a moment
+        setTimeout(() => this.updateSyncStatusDisplay(statusEl), 500);
+      };
+    } else {
+      manualStatus.createSpan({
+        text: '⏸️ No manual sync running',
+        cls: 'sync-status-idle',
+      });
+
+      const idleDetails = manualSection.createDiv({ cls: 'sync-status-details' });
+      idleDetails.createSpan({ 
+        text: 'Click "Sync Now" to start a manual sync operation',
+        cls: 'sync-status-detail-text' 
+      });
     }
   }
 

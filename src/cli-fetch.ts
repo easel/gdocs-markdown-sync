@@ -337,7 +337,7 @@ async function cmdSync(flags: Dict) {
   try {
     const driveFolder = getFlag(flags, 'drive-folder', 'DRIVE_FOLDER');
     const localDir = getFlag(flags, 'local-dir', 'LOCAL_DIR');
-    const conflictPolicy = getFlag(flags, 'conflicts', 'CONFLICT_POLICY') || 'prefer-doc';
+    const conflictPolicy = getFlag(flags, 'conflicts', 'CONFLICT_POLICY') || 'last-write-wins';
     const dryRun = flags['dry-run'] === 'true';
 
     if (!driveFolder || !localDir) {
