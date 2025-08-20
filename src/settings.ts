@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, PluginSettingTab, Setting } from 'obsidian';
 
 import GoogleDocsSyncPlugin from './plugin-main';
 
@@ -18,7 +18,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     containerEl.createEl('h2', { text: 'Google Docs Sync Settings' });
-    
+
     // Add authentication status section at the top
     await this.displayAuthenticationStatus(containerEl);
 
@@ -144,7 +144,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       });
 
     containerEl.createEl('h3', { text: 'Google OAuth Configuration' });
-    
+
     const oauthDesc = containerEl.createDiv({ cls: 'oauth-description' });
     oauthDesc.innerHTML = `
       <p>Configure your Google OAuth credentials. You'll need to create a project in the <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a> and set up OAuth2 credentials.</p>
@@ -197,11 +197,11 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
 
     // Authentication actions section
     containerEl.createEl('h3', { text: 'Authentication' });
-    
+
     const authSetting = new Setting(containerEl)
       .setName('Google Account Access')
       .setDesc('Authenticate with Google to enable document synchronization');
-    
+
     // Add the auth button that will be dynamically updated
     this.authButton = authSetting.controlEl;
     await this.updateAuthButton();
@@ -213,7 +213,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
   private async displayAuthenticationStatus(containerEl: HTMLElement): Promise<void> {
     const statusSection = containerEl.createDiv({ cls: 'auth-status-section' });
     statusSection.createEl('h3', { text: 'Authentication Status' });
-    
+
     this.authStatusDiv = statusSection.createDiv({ cls: 'auth-status-display' });
     await this.updateAuthStatus();
   }
@@ -225,39 +225,39 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     if (!this.authStatusDiv) return;
 
     this.authStatusDiv.empty();
-    
+
     try {
       const status = await this.plugin.getAuthStatus();
-      
+
       if (status.isAuthenticated) {
         this.authStatusDiv.className = 'auth-status-display authenticated';
-        this.authStatusDiv.createEl('div', { 
-          text: '✓ Authenticated', 
-          cls: 'status-indicator success' 
+        this.authStatusDiv.createEl('div', {
+          text: '✓ Authenticated',
+          cls: 'status-indicator success',
         });
-        this.authStatusDiv.createEl('p', { 
-          text: 'Successfully connected to Google Docs API.', 
-          cls: 'status-message' 
+        this.authStatusDiv.createEl('p', {
+          text: 'Successfully connected to Google Docs API.',
+          cls: 'status-message',
         });
       } else {
         this.authStatusDiv.className = 'auth-status-display not-authenticated';
-        this.authStatusDiv.createEl('div', { 
-          text: '⚠ Not Authenticated', 
-          cls: 'status-indicator warning' 
+        this.authStatusDiv.createEl('div', {
+          text: '⚠ Not Authenticated',
+          cls: 'status-indicator warning',
         });
-        
+
         if (status.error) {
-          this.authStatusDiv.createEl('p', { 
-            text: status.error, 
-            cls: 'status-message error' 
+          this.authStatusDiv.createEl('p', {
+            text: status.error,
+            cls: 'status-message error',
           });
         }
-        
+
         if (status.nextSteps && status.nextSteps.length > 0) {
           const stepsDiv = this.authStatusDiv.createDiv({ cls: 'next-steps' });
           stepsDiv.createEl('p', { text: 'Next steps:', cls: 'steps-title' });
           const stepsList = stepsDiv.createEl('ul');
-          
+
           for (const step of status.nextSteps) {
             stepsList.createEl('li', { text: step });
           }
@@ -265,16 +265,16 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       }
     } catch (error) {
       this.authStatusDiv.className = 'auth-status-display error';
-      this.authStatusDiv.createEl('div', { 
-        text: '⚠ Status Check Failed', 
-        cls: 'status-indicator error' 
+      this.authStatusDiv.createEl('div', {
+        text: '⚠ Status Check Failed',
+        cls: 'status-indicator error',
       });
-      this.authStatusDiv.createEl('p', { 
-        text: `Failed to check authentication: ${(error as Error).message}`, 
-        cls: 'status-message error' 
+      this.authStatusDiv.createEl('p', {
+        text: `Failed to check authentication: ${(error as Error).message}`,
+        cls: 'status-message error',
       });
     }
-    
+
     // Update auth button after status update
     await this.updateAuthButton();
   }
@@ -286,29 +286,28 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     if (!this.authButton) return;
 
     this.authButton.empty();
-    
+
     try {
       const status = await this.plugin.getAuthStatus();
       const hasCredentials = this.plugin.settings.clientId && this.plugin.settings.clientSecret;
-      
+
       if (!hasCredentials) {
         // Show setup guidance when credentials are missing
         this.authButton.createEl('div', {
           text: 'Configure Client ID and Client Secret above to enable authentication',
-          cls: 'auth-guidance disabled'
+          cls: 'auth-guidance disabled',
         });
-        
+
         const disabledButton = this.authButton.createEl('button', {
           text: 'Authentication Disabled',
-          cls: 'auth-button disabled'
+          cls: 'auth-button disabled',
         });
         disabledButton.disabled = true;
-        
       } else if (status.isAuthenticated) {
         // Show clear auth button when authenticated
         const clearButton = this.authButton.createEl('button', {
           text: 'Clear Authentication',
-          cls: 'auth-button clear mod-warning'
+          cls: 'auth-button clear mod-warning',
         });
         clearButton.onclick = async () => {
           try {
@@ -318,11 +317,11 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             console.error('Failed to clear authentication:', error);
           }
         };
-        
+
         // Add re-authenticate option
         const reAuthButton = this.authButton.createEl('button', {
           text: 'Re-authenticate',
-          cls: 'auth-button reauth'
+          cls: 'auth-button reauth',
         });
         reAuthButton.onclick = async () => {
           try {
@@ -334,12 +333,11 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             console.error('Failed to re-authenticate:', error);
           }
         };
-        
       } else {
         // Show start auth button when not authenticated but credentials available
         const authButton = this.authButton.createEl('button', {
           text: 'Start Authentication',
-          cls: 'auth-button start mod-cta'
+          cls: 'auth-button start mod-cta',
         });
         authButton.onclick = async () => {
           try {
@@ -352,7 +350,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             await this.updateAuthStatus();
           }
         };
-        
+
         // Show CLI alternative
         const cliNote = this.authButton.createDiv({ cls: 'auth-alternative' });
         cliNote.innerHTML = `
@@ -361,38 +359,12 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           <p>The plugin will automatically detect CLI credentials.</p>
         `;
       }
-      
     } catch (error) {
       this.authButton.createEl('div', {
         text: `Error updating auth controls: ${(error as Error).message}`,
-        cls: 'auth-error'
+        cls: 'auth-error',
       });
     }
-  }
-
-  /**
-   * Validate settings before allowing authentication
-   */
-  private validateAuthSettings(): { valid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    
-    if (!this.plugin.settings.clientId || this.plugin.settings.clientId.trim() === '') {
-      errors.push('Client ID is required for authentication');
-    }
-    
-    if (!this.plugin.settings.clientSecret || this.plugin.settings.clientSecret.trim() === '') {
-      errors.push('Client Secret is required for authentication');
-    }
-    
-    // Validate Client ID format (should be Google OAuth2 client ID format)
-    if (this.plugin.settings.clientId && !this.plugin.settings.clientId.includes('googleusercontent.com')) {
-      errors.push('Client ID should end with .googleusercontent.com');
-    }
-    
-    return {
-      valid: errors.length === 0,
-      errors
-    };
   }
 
   /**
@@ -410,13 +382,13 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     const currentStatus = this.plugin.syncStatusManager.getCurrentStatus();
 
     const statusContainer = statusEl.createDiv({ cls: 'sync-status-container' });
-    
+
     // Main status
     const mainStatus = statusContainer.createDiv({ cls: 'sync-status-main' });
     const statusIcon = this.getStatusIcon(currentStatus.state);
-    mainStatus.createSpan({ 
+    mainStatus.createSpan({
       text: `${statusIcon} ${currentStatus.message}`,
-      cls: `sync-status-${currentStatus.state}`
+      cls: `sync-status-${currentStatus.state}`,
     });
 
     // Details
@@ -426,15 +398,15 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     // Stats
     if (status.queuedCount > 0 || status.failedCount > 0 || status.lastSync) {
       const stats = statusContainer.createDiv({ cls: 'sync-status-stats' });
-      
+
       if (status.queuedCount > 0) {
         stats.createSpan({ text: `${status.queuedCount} queued`, cls: 'sync-stat-queued' });
       }
-      
+
       if (status.failedCount > 0) {
         stats.createSpan({ text: `${status.failedCount} failed`, cls: 'sync-stat-failed' });
       }
-      
+
       if (status.lastSync) {
         const lastSyncText = this.formatLastSync(status.lastSync);
         stats.createSpan({ text: `Last: ${lastSyncText}`, cls: 'sync-stat-last' });
@@ -444,15 +416,15 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     // Error info
     if (currentStatus.errorInfo) {
       const errorInfo = statusContainer.createDiv({ cls: 'sync-status-error-info' });
-      errorInfo.createSpan({ 
+      errorInfo.createSpan({
         text: `⚠️ ${currentStatus.errorInfo.message}`,
-        cls: 'sync-error-message'
+        cls: 'sync-error-message',
       });
-      
+
       if (currentStatus.errorInfo.userAction) {
-        errorInfo.createDiv({ 
+        errorInfo.createDiv({
           text: `Action needed: ${currentStatus.errorInfo.userAction}`,
-          cls: 'sync-error-action'
+          cls: 'sync-error-action',
         });
       }
     }
@@ -474,7 +446,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
   private formatLastSync(timestamp: Date): string {
     const now = Date.now();
     const diffMs = now - timestamp.getTime();
-    
+
     if (diffMs < 60000) {
       return 'Just now';
     } else if (diffMs < 3600000) {

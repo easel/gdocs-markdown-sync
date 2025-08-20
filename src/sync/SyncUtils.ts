@@ -2,6 +2,8 @@
  * Shared sync utilities for both CLI and plugin
  */
 
+import { computeSHA256 as sharedComputeSHA256 } from '../fs/frontmatter';
+
 export interface FrontMatter {
   [key: string]: any;
   'google-doc-id'?: string;
@@ -105,25 +107,11 @@ export class SyncUtils {
 
   /**
    * Compute SHA256 hash of content
+   * @deprecated Use computeSHA256 from src/fs/frontmatter.ts instead
    */
   static async computeSHA256(content: string): Promise<string> {
-    // Try Web Crypto API first (available in both browser and modern Node.js)
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(content);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    // Fallback to Node.js crypto module
-    try {
-      const crypto = await import('crypto');
-      return crypto.createHash('sha256').update(content).digest('hex');
-    } catch (error) {
-      console.warn('SHA256 computation not available, using timestamp as fallback');
-      return Date.now().toString();
-    }
+    // Use shared implementation from frontmatter module
+    return sharedComputeSHA256(content);
   }
 
   /**

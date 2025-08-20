@@ -25,7 +25,11 @@
       "Bash(mv:*)",
       "Bash(git reset:*)",
       "Bash(gh run list:*)",
-      "Bash(gh run view:*)"
+      "Bash(gh run view:*)",
+      "Bash(bun run:*)",
+      "Bash(unzip:*)",
+      "Bash(bun test:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": [],

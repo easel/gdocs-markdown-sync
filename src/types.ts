@@ -7,6 +7,9 @@ export interface GoogleDocsSyncSettings {
   clientSecret?: string;
   profile?: string; // token profile name, default 'default'
   authToken?: string;
+  // Background sync settings
+  backgroundSyncEnabled?: boolean; // Enable/disable background sync
+  backgroundSyncSilentMode?: boolean; // Reduce notifications for background operations
 }
 
 export interface GoogleDocsSyncPluginData {

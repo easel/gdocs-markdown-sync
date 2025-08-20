@@ -3,13 +3,16 @@
 // Modern CLI using fetch API and shared components
 // Commands: auth | pull | push | sync | help
 
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
 import path from 'path';
 
 import { AuthManagerFactory } from './auth/AuthManagerFactory.js';
 import { parseArgs, getFlag, Dict } from './cli_utils.js';
 import { DriveAPI } from './drive/DriveAPI.js';
+import { ConflictResolver } from './sync/ConflictResolver.js';
+import { createSyncService } from './sync/SyncService.js';
 import { SyncUtils } from './sync/SyncUtils.js';
+import { GoogleDocsSyncSettings } from './types.js';
 import { getConfig, getNetworkConfig } from './utils/Config.js';
 import { ErrorAggregator, BaseError, ErrorUtils } from './utils/ErrorUtils.js';
 import { Logger, LogLevel, createLogger } from './utils/Logger.js';
@@ -27,13 +30,20 @@ Usage:
 Flags:
   --drive-folder      Google Drive folder name or ID (env: DRIVE_FOLDER)
   --local-dir         Local directory for Markdown (env: LOCAL_DIR)
+  --conflicts         Conflict policy: prefer-doc|prefer-md|merge (env: CONFLICT_POLICY)
+  --dry-run           Preview changes without executing them
   --log-level         Set log level: DEBUG, INFO, WARN, ERROR (env: LOG_LEVEL)
+
+Conflict Resolution:
+  prefer-doc         Always use Google Doc version when conflicts occur
+  prefer-md          Always use Markdown file version when conflicts occur  
+  merge              Attempt intelligent merge, fall back to conflict markers
 
 Notes:
   - 'auth' launches an OAuth flow and saves tokens for reuse.
   - 'pull' exports Google Docs in the folder to Markdown into local-dir.
   - 'push' uploads/updates Markdown files from local-dir to Google Docs.
-  - 'sync' runs pull then push.
+  - 'sync' performs intelligent bidirectional sync with conflict resolution.
   - If --drive-folder contains a name (not starting with folder ID pattern), 
     the CLI will find or create a folder with that name in your Drive root.
 `);
@@ -319,6 +329,215 @@ async function cmdPush(flags: Dict) {
   }
 }
 
+async function cmdSync(flags: Dict) {
+  const logger = createLogger({ operation: 'sync-command' });
+  const operation = logger.startOperation('intelligent-sync');
+  const errorAggregator = new ErrorAggregator();
+
+  try {
+    const driveFolder = getFlag(flags, 'drive-folder', 'DRIVE_FOLDER');
+    const localDir = getFlag(flags, 'local-dir', 'LOCAL_DIR');
+    const conflictPolicy = getFlag(flags, 'conflicts', 'CONFLICT_POLICY') || 'prefer-doc';
+    const dryRun = flags['dry-run'] === 'true';
+
+    if (!driveFolder || !localDir) {
+      operation.failure('Missing required configuration', {
+        metadata: { driveFolder: !!driveFolder, localDir: !!localDir },
+      });
+      process.exit(2);
+    }
+
+    // Validate conflict policy
+    if (!ConflictResolver.isValidPolicy(conflictPolicy as any)) {
+      operation.failure(
+        `Invalid conflict policy: ${conflictPolicy}. Must be one of: prefer-doc, prefer-md, merge`,
+      );
+      process.exit(2);
+    }
+
+    const driveAPI = await getDriveAPI();
+    const driveFolderId = await driveAPI.resolveFolderId(driveFolder);
+
+    // Create sync service with settings
+    const settings: GoogleDocsSyncSettings = {
+      driveFolderId,
+      conflictPolicy: conflictPolicy as any,
+      pollInterval: 60, // Not used in CLI
+    };
+
+    const syncService = createSyncService(settings);
+
+    await ensureDir(localDir);
+    operation.info(
+      `Intelligent sync: Drive folder "${driveFolder}" (${driveFolderId}) ↔ ${localDir}`,
+    );
+    operation.info(
+      `Conflict policy: ${conflictPolicy} - ${ConflictResolver.getPolicyDescription(conflictPolicy as any)}`,
+    );
+
+    if (dryRun) {
+      operation.info('🔍 DRY RUN MODE - No changes will be made');
+    }
+
+    // Get all documents from Drive
+    const remoteDocs = await driveAPI.listDocsInFolder(driveFolderId);
+    operation.info(`Found ${remoteDocs.length} remote document(s)`);
+
+    // Get all local markdown files
+    const localFiles = await walkMarkdownFiles(localDir);
+    operation.info(`Found ${localFiles.length} local markdown file(s)`);
+
+    let syncCount = 0;
+    let conflictCount = 0;
+    let skipCount = 0;
+
+    // Process each remote document
+    for (const doc of remoteDocs) {
+      const docLogger = logger.startOperation('sync-document', {
+        resourceId: doc.id,
+        resourceName: doc.name,
+      });
+
+      try {
+        // Find corresponding local file
+        const localFile = localFiles.find((f) => {
+          const content = readFileSync(f.fullPath, 'utf8');
+          const { frontmatter } = SyncUtils.parseFrontMatter(content);
+          return frontmatter.docId === doc.id || frontmatter['google-doc-id'] === doc.id;
+        });
+
+        let localContent = '';
+        let localFrontmatter = {};
+
+        if (localFile) {
+          const raw = await fs.readFile(localFile.fullPath, 'utf8');
+          const parsed = SyncUtils.parseFrontMatter(raw);
+          localContent = parsed.markdown;
+          localFrontmatter = parsed.frontmatter;
+        } else {
+          // New document from remote - create local file
+          localContent = '';
+          localFrontmatter = {
+            'google-doc-id': doc.id,
+            'google-doc-url': `https://docs.google.com/document/d/${doc.id}/edit`,
+            'google-doc-title': doc.name,
+          };
+        }
+
+        // Get remote content
+        const remoteContent = await driveAPI.exportDocAsMarkdown(doc.id);
+
+        // Perform intelligent sync
+        const syncResult = await syncService.syncDocument(
+          localContent,
+          localFrontmatter,
+          remoteContent,
+          doc.modifiedTime || '',
+          doc.modifiedTime || '',
+          { dryRun },
+        );
+
+        if (!syncResult.result.success) {
+          throw new Error(syncResult.result.error || 'Sync failed');
+        }
+
+        // Generate summary
+        const summary = syncService.generateSyncSummary(syncResult.result);
+        docLogger.info(summary);
+
+        if (syncResult.result.action === 'conflict_manual') {
+          conflictCount++;
+        } else if (syncResult.result.action === 'no_change') {
+          skipCount++;
+        } else {
+          syncCount++;
+        }
+
+        // Update local file if not dry run
+        if (!dryRun && syncResult.updatedContent && syncResult.updatedFrontmatter) {
+          let filePath: string;
+
+          if (localFile) {
+            filePath = localFile.fullPath;
+          } else {
+            // Create new file
+            const fileName = SyncUtils.sanitizeFileName(doc.name) + '.md';
+            filePath = path.join(localDir, fileName);
+          }
+
+          const updatedDocument = SyncUtils.buildMarkdownWithFrontmatter(
+            syncResult.updatedFrontmatter,
+            syncResult.updatedContent,
+          );
+          await fs.writeFile(filePath, updatedDocument, 'utf8');
+        }
+
+        // Show conflict details if needed
+        if (syncResult.result.conflictMarkers && syncResult.result.conflictMarkers.length > 0) {
+          docLogger.warn('Conflict details:');
+          for (const marker of syncResult.result.conflictMarkers) {
+            docLogger.warn(`  • ${marker}`);
+          }
+        }
+
+        docLogger.success(`✓ Synced ${doc.name}`);
+      } catch (err: any) {
+        const errorContext = {
+          resourceId: doc.id,
+          resourceName: doc.name,
+          operation: 'sync-document',
+        };
+        errorAggregator.add(ErrorUtils.normalize(err, errorContext));
+        docLogger.failure(
+          `✗ Failed to sync ${doc?.name ?? 'unknown'}`,
+          errorContext,
+          err instanceof Error ? err : undefined,
+        );
+      }
+    }
+
+    // Process orphaned local files (files with docId but no matching remote doc)
+    for (const localFile of localFiles) {
+      try {
+        const raw = await fs.readFile(localFile.fullPath, 'utf8');
+        const { frontmatter } = SyncUtils.parseFrontMatter(raw);
+        const docId = frontmatter.docId || frontmatter['google-doc-id'];
+
+        if (docId && !remoteDocs.find((doc) => doc.id === docId)) {
+          operation.warn(
+            `⚠ Local file ${localFile.relativePath} references non-existent document ${docId}`,
+          );
+          // Could implement cleanup or re-push logic here
+        }
+      } catch (err) {
+        operation.warn(`Failed to check local file ${localFile.relativePath}: ${err}`);
+      }
+    }
+
+    // Summary
+    if (errorAggregator.hasErrors()) {
+      const summary = errorAggregator.getSummary('sync-documents');
+      operation.warn(
+        `Sync completed with ${summary.totalErrors} error(s). ` +
+          `Synced: ${syncCount}, Conflicts: ${conflictCount}, Skipped: ${skipCount}`,
+      );
+      logger.warn('Sync errors summary:', {}, new Error(errorAggregator.toString()));
+    } else {
+      operation.success(
+        `✅ Sync completed successfully. ` +
+          `Synced: ${syncCount}, Conflicts: ${conflictCount}, Skipped: ${skipCount}`,
+      );
+    }
+
+    if (dryRun) {
+      operation.info('🔍 DRY RUN complete - no files were modified');
+    }
+  } catch (error) {
+    operation.failure('Sync operation failed', {}, error instanceof Error ? error : undefined);
+    throw error;
+  }
+}
+
 async function main() {
   // Initialize configuration and logging
   const config = getConfig();
@@ -354,10 +573,7 @@ async function main() {
         await cmdPush(flags);
         break;
       case 'sync':
-        // Simple sync strategy: pull then push
-        operation.info('Starting bidirectional sync (pull then push)');
-        await cmdPull(flags);
-        await cmdPush(flags);
+        await cmdSync(flags);
         break;
       case 'help':
       default:

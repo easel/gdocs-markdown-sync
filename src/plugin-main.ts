@@ -1,18 +1,17 @@
 import { Plugin, TFile, Notice, Menu, WorkspaceLeaf, MarkdownView, Modal } from 'obsidian';
 
-import { getBuildVersion } from './version';
+import { PluginAuthManager } from './auth/PluginAuthManager';
+import { parseFrontMatter, buildFrontMatter } from './fs/frontmatter';
+import { GoogleDocsSyncSettingsTab } from './settings';
+import { SyncErrorClassifier } from './sync/BackgroundSyncErrors';
+import { BackgroundSyncManager } from './sync/BackgroundSyncManager';
+import { ConflictResolver } from './sync/ConflictResolver';
 import { SyncService, createSyncService } from './sync/SyncService';
+import { SyncStatusManager } from './sync/SyncStatusManager';
 import { SyncUtils, FrontMatter } from './sync/SyncUtils';
 import { GoogleDocsSyncSettings as ImportedSettings } from './types';
-import { PluginAuthManager } from './auth/PluginAuthManager';
-import { ObsidianTokenStorage } from './auth/ObsidianTokenStorage';
-import { parseFrontMatter, buildFrontMatter, computeSHA256, FrontMatter as FSFrontMatter } from './fs/frontmatter';
-import { ErrorUtils, BaseError, ErrorAggregator } from './utils/ErrorUtils';
-import { BackgroundSyncManager } from './sync/BackgroundSyncManager';
-import { SyncStatusManager } from './sync/SyncStatusManager';
-import { SyncError, SyncErrorClassifier } from './sync/BackgroundSyncErrors';
-import { GoogleDocsSyncSettingsTab } from './settings';
-import { ConflictResolver } from './sync/ConflictResolver';
+import { ErrorUtils, BaseError } from './utils/ErrorUtils';
+import { getBuildVersion } from './version';
 
 interface GoogleDocsSyncSettings extends ImportedSettings {
   // Plugin-specific extensions can be added here
@@ -201,8 +200,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   settings!: GoogleDocsSyncSettings;
   private changeDetector!: ChangeDetector;
   private syncService!: SyncService;
-  private backgroundSyncManager!: BackgroundSyncManager;
-  private syncStatusManager!: SyncStatusManager;
+  public backgroundSyncManager!: BackgroundSyncManager;
+  public syncStatusManager!: SyncStatusManager;
   private headerActions: Map<string, HTMLElement> = new Map();
   private statusBarItem!: HTMLElement;
   private updateTimeout: number | null = null;
@@ -213,10 +212,10 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     console.log(`Loading Google Docs Sync plugin ${buildVersion}`);
 
     await this.loadSettings();
-    
+
     // Initialize auth manager with plugin instance for token storage
     this.authManager = new PluginAuthManager(this.settings.profile, this);
-    
+
     this.changeDetector = new ChangeDetector(this);
     this.syncService = createSyncService(this.settings);
 
@@ -231,8 +230,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       this.settings,
       {
         enabled: this.settings.backgroundSyncEnabled !== false,
-        silentMode: this.settings.backgroundSyncSilentMode === true
-      }
+        silentMode: this.settings.backgroundSyncSilentMode === true,
+      },
     );
 
     // Add status bar item for overall sync status
@@ -367,17 +366,17 @@ export default class GoogleDocsSyncPlugin extends Plugin {
           await this.performSmartSync(file);
         } catch (error) {
           // Convert to classified sync error
-          const syncError = SyncErrorClassifier.classifyError(
-            error as Error,
-            { operation: 'background_sync', filePath: file.path }
-          );
+          const syncError = SyncErrorClassifier.classifyError(error as Error, {
+            operation: 'background_sync',
+            filePath: file.path,
+          });
           this.syncStatusManager.handleSyncError(syncError, file.name);
           throw syncError;
         }
       },
       hasGoogleDocsMetadata: (file: TFile) => {
         return !!this.getGoogleDocsMetadataSync(file);
-      }
+      },
     });
 
     // Start background sync
@@ -410,21 +409,23 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       driveFolderId: '',
       baseVaultFolder: '',
       conflictPolicy: 'prefer-doc',
-      pollInterval: 60
+      pollInterval: 60,
+      backgroundSyncEnabled: true,
+      backgroundSyncSilentMode: false,
     };
-    
+
     this.settings = Object.assign(DEFAULT_SETTINGS, await this.loadData());
-    
+
     // Validate settings after loading
     this.validateSettings();
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
-    
+
     // Update sync service with new settings
     this.syncService = createSyncService(this.settings);
-    
+
     // Update auth manager profile if changed
     if (this.authManager) {
       this.authManager = new PluginAuthManager(this.settings.profile, this);
@@ -434,7 +435,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     if (this.backgroundSyncManager) {
       this.backgroundSyncManager.updateSettings(this.settings, {
         enabled: this.settings.backgroundSyncEnabled !== false,
-        silentMode: this.settings.backgroundSyncSilentMode === true
+        silentMode: this.settings.backgroundSyncSilentMode === true,
       });
     }
   }
@@ -557,7 +558,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         frontmatter,
         remoteData.content,
         remoteData.revisionId,
-        remoteData.modifiedTime
+        remoteData.modifiedTime,
       );
 
       if (!syncResult.result.success) {
@@ -568,7 +569,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       if (syncResult.updatedContent && syncResult.updatedFrontmatter) {
         const updatedDocument = SyncUtils.buildMarkdownWithFrontmatter(
           syncResult.updatedFrontmatter,
-          syncResult.updatedContent
+          syncResult.updatedContent,
         );
         await this.app.vault.modify(file, updatedDocument);
       }
@@ -591,12 +592,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       if (activeLeaf) {
         this.updateHeaderAction(activeLeaf.leaf);
       }
-
     } catch (error) {
       const normalizedError = ErrorUtils.normalize(error as any, {
         operation: 'smart-sync',
         resourceName: file.name,
-        filePath: file.path
+        filePath: file.path,
       });
       notice.setMessage(`❌ Sync failed: ${normalizedError.message}`);
       setTimeout(() => notice.hide(), 5000);
@@ -729,7 +729,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       const normalizedError = ErrorUtils.normalize(error as any, {
         operation: 'push-document',
         resourceName: file.name,
-        filePath: file.path
+        filePath: file.path,
       });
       notice.setMessage(`Push failed: ${normalizedError.message}`);
       setTimeout(() => notice.hide(), 5000);
@@ -746,10 +746,10 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       enhancedNotice.update('Checking document metadata...');
       const metadata = await this.getGoogleDocsMetadata(file);
       if (!metadata) {
-        throw new DriveAPIError('No Google Docs metadata found', undefined, {
+        throw new BaseError('No Google Docs metadata found', {
           resourceName: file.name,
           filePath: file.path,
-          operation: 'validate-metadata'
+          operation: 'validate-metadata',
         });
       }
 
@@ -762,14 +762,14 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         skipped: 0,
         conflicted: 0,
         errors: 0,
-        total: 1
+        total: 1,
       };
 
       const message = this.formatOperationSummary(
         `✅ Updated ${file.name} from Google Doc`,
-        summary
+        summary,
       );
-      
+
       enhancedNotice.update(message);
       setTimeout(() => enhancedNotice.hide(), 3000);
 
@@ -969,7 +969,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
       // Sanitize markdown for Google Drive compatibility
       const sanitizedMarkdown = SyncUtils.sanitizeMarkdownForGoogleDrive(markdown);
-      
+
       // Create new document
       const docId = await this.createGoogleDoc(sanitizedName, sanitizedMarkdown, folderId);
       await this.updateFileWithNewDocId(file, docId);
@@ -986,7 +986,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       const normalizedError = ErrorUtils.normalize(error as any, {
         operation: 'create-google-doc',
         resourceName: file.name,
-        filePath: file.path
+        filePath: file.path,
       });
       notice.setMessage(`Failed to create Google Doc: ${normalizedError.message}`);
       setTimeout(() => notice.hide(), 5000);
@@ -1009,14 +1009,14 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // TODO: Implement actual Google Docs API call
     const docId = frontmatter['google-doc-id'] || frontmatter.docId;
     if (!docId) return null;
-    
+
     console.log(`Getting remote content for doc ${docId}`);
-    
+
     // Placeholder implementation
     return {
       content: 'Remote document content (placeholder)',
       revisionId: 'rev-' + Date.now(),
-      modifiedTime: new Date().toISOString()
+      modifiedTime: new Date().toISOString(),
     };
   }
 
@@ -1035,7 +1035,9 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   async createGoogleDoc(title: string, content: string, folderId: string): Promise<string> {
     // TODO: Implement actual Google Docs creation
     // Content is already sanitized by caller using SyncUtils.sanitizeMarkdownForGoogleDrive
-    console.log(`Creating Google Doc "${title}" in folder ${folderId} with ${content.length} characters`);
+    console.log(
+      `Creating Google Doc "${title}" in folder ${folderId} with ${content.length} characters`,
+    );
     return 'dummy-doc-id';
   }
 
@@ -1064,7 +1066,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       },
       hide: () => {
         notice.hide();
-      }
+      },
     };
   }
 
@@ -1073,7 +1075,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    */
   private formatOperationSummary(baseMessage: string, summary: OperationSummary): string {
     const parts = [baseMessage];
-    
+
     if (summary.total > 1) {
       const details = [];
       if (summary.created > 0) details.push(`${summary.created} created`);
@@ -1081,12 +1083,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       if (summary.skipped > 0) details.push(`${summary.skipped} skipped`);
       if (summary.conflicted > 0) details.push(`${summary.conflicted} conflicts`);
       if (summary.errors > 0) details.push(`${summary.errors} errors`);
-      
+
       if (details.length > 0) {
         parts.push(`\n📊 Summary: ${details.join(', ')}`);
       }
     }
-    
+
     return parts.join('');
   }
 
@@ -1098,7 +1100,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     if (!ConflictResolver.isValidPolicy(this.settings.conflictPolicy)) {
       return {
         valid: false,
-        error: `Invalid conflict policy: ${this.settings.conflictPolicy}. Must be one of: prefer-doc, prefer-md, merge`
+        error: `Invalid conflict policy: ${this.settings.conflictPolicy}. Must be one of: prefer-doc, prefer-md, merge`,
       };
     }
 
@@ -1106,21 +1108,26 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     if (this.settings.driveFolderId) {
       const folderIdPattern = /^[a-zA-Z0-9_-]{25,}$/;
       const isValidId = folderIdPattern.test(this.settings.driveFolderId.trim());
-      const isValidName = this.settings.driveFolderId.trim().length > 0 && !this.settings.driveFolderId.includes('/');
-      
+      const isValidName =
+        this.settings.driveFolderId.trim().length > 0 && !this.settings.driveFolderId.includes('/');
+
       if (!isValidId && !isValidName) {
         return {
           valid: false,
-          error: 'Drive folder must be a valid folder name or folder ID (25+ alphanumeric characters)'
+          error:
+            'Drive folder must be a valid folder name or folder ID (25+ alphanumeric characters)',
         };
       }
     }
 
     // Validate poll interval
-    if (this.settings.pollInterval && (this.settings.pollInterval < 5 || this.settings.pollInterval > 3600)) {
+    if (
+      this.settings.pollInterval &&
+      (this.settings.pollInterval < 5 || this.settings.pollInterval > 3600)
+    ) {
       return {
         valid: false,
-        error: 'Poll interval must be between 5 seconds and 1 hour (3600 seconds)'
+        error: 'Poll interval must be between 5 seconds and 1 hour (3600 seconds)',
       };
     }
 
@@ -1132,7 +1139,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    */
   private getActionableErrorMessage(error: BaseError): string {
     const baseMessage = error.message;
-    
+
     // Add specific guidance based on error type
     if (error.name === 'DriveAPIError') {
       const driveError = error as any;
@@ -1155,7 +1162,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     if (error.correlationId) {
       return `${baseMessage} (ID: ${error.correlationId.slice(-8)})`;
     }
-    
+
     return baseMessage;
   }
 
@@ -1166,39 +1173,20 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     const normalizedError = ErrorUtils.normalize(error, {
       operation: 'sync-document',
       resourceName: file.name,
-      filePath: file.path
+      filePath: file.path,
     });
 
     const actionableMessage = this.getActionableErrorMessage(normalizedError);
     notice.update(`❌ Sync failed: ${actionableMessage}`);
-    
+
     // Keep error notice visible longer for user to read
     setTimeout(() => notice.hide(), 10000);
-    
+
     // Log detailed error for debugging
     console.error('Smart sync failed:', {
       file: file.path,
       error: normalizedError,
-      correlationId: normalizedError.correlationId
-    });
-  }
-
-  /**
-   * Handle bulk operation errors
-   */
-  private handleBulkOperationError(error: any, operation: 'push' | 'pull', notice: EnhancedNotice): void {
-    const normalizedError = ErrorUtils.normalize(error, {
-      operation: `bulk-${operation}`
-    });
-
-    const actionableMessage = this.getActionableErrorMessage(normalizedError);
-    notice.update(`❌ ${operation.charAt(0).toUpperCase() + operation.slice(1)} failed: ${actionableMessage}`);
-    
-    setTimeout(() => notice.hide(), 10000);
-    
-    console.error(`Bulk ${operation} operation failed:`, {
-      error: normalizedError,
-      correlationId: normalizedError.correlationId
+      correlationId: normalizedError.correlationId,
     });
   }
 
@@ -1225,14 +1213,15 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       // Strategy 2: Try direct Node.js approach (fallback)
       async () => {
         try {
-          const { exec } = (window as any).require?.('child_process');
+          const { exec } = (window as any).require?.('child_process') || {};
           if (exec) {
-            const command = process.platform === 'darwin' 
-              ? `open "${url}"` 
-              : process.platform === 'win32' 
-              ? `start "" "${url}"` 
-              : `xdg-open "${url}"`;
-            
+            const command =
+              process.platform === 'darwin'
+                ? `open "${url}"`
+                : process.platform === 'win32'
+                  ? `start "" "${url}"`
+                  : `xdg-open "${url}"`;
+
             exec(command, (error: any) => {
               if (error) console.log('Command line browser open failed:', error);
             });
@@ -1261,7 +1250,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
           console.log('Window.open method failed:', error);
         }
         return false;
-      }
+      },
     ];
 
     // Try each strategy in order
@@ -1298,12 +1287,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         return;
       }
 
-      // Generate OAuth URL (placeholder - will need actual OAuth URL generation)
-      const authUrl = this.generateAuthUrl();
-      
+      // Generate OAuth URL with PKCE parameters
+      const authUrl = await this.generateAuthUrl();
+
       // Try to open browser with fallback strategies
       const browserOpened = await this.tryOpenBrowser(authUrl);
-      
+
       if (browserOpened) {
         // Show success modal with next steps
         new AuthSuccessModal(this.app, authUrl, () => {
@@ -1316,27 +1305,61 @@ export default class GoogleDocsSyncPlugin extends Plugin {
           this.handleAuthCallback(authCode);
         }).open();
       }
-
     } catch (error) {
       console.error('Auth flow failed:', error);
       new Notice(`Authentication failed: ${(error as Error).message}`);
     }
   }
 
+  // Store PKCE verifier for this auth session
+  private pkceVerifier: string | null = null;
+
   /**
-   * Generate OAuth authorization URL
+   * Generate OAuth authorization URL with PKCE
    */
-  private generateAuthUrl(): string {
+  private async generateAuthUrl(): Promise<string> {
+    // Generate PKCE challenge/verifier pair
+    const { codeVerifier, codeChallenge } = await this.generatePKCE();
+    this.pkceVerifier = codeVerifier;
+
     const params = new URLSearchParams({
       client_id: this.settings.clientId || '',
       redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', // For manual code entry
       scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
       response_type: 'code',
       access_type: 'offline',
-      prompt: 'consent'
+      prompt: 'consent',
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
 
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  }
+
+  /**
+   * Generate PKCE challenge and verifier for browser environment
+   */
+  private async generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: string }> {
+    // Generate cryptographically secure random verifier
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    const codeVerifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+
+    // Create SHA256 challenge from verifier
+    const encoder = new TextEncoder();
+    const data = encoder.encode(codeVerifier);
+    
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = new Uint8Array(hashBuffer);
+    const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+    
+    return { codeVerifier, codeChallenge };
   }
 
   /**
@@ -1344,35 +1367,90 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    */
   private async handleAuthCallback(authCode: string): Promise<void> {
     const notice = new Notice('Exchanging authorization code...', 0);
-    
-    try {
-      // TODO: Implement actual token exchange
-      // This would normally call Google's token endpoint
-      console.log('Would exchange auth code:', authCode);
-      
-      // Placeholder for token exchange result
-      const tokenResult = {
-        access_token: 'placeholder_access_token',
-        refresh_token: 'placeholder_refresh_token',
-        expires_in: 3600,
-        token_type: 'Bearer'
-      };
 
-      // Store tokens using enhanced auth manager
+    try {
+      if (!this.pkceVerifier) {
+        throw new Error('PKCE verifier not found. Please restart the authentication flow.');
+      }
+
+      // Exchange authorization code for tokens using Google OAuth endpoint
+      const tokens = await this.exchangeCodeForTokens(authCode, this.pkceVerifier);
+
+      // Store tokens using Obsidian plugin storage
       await this.authManager.storeCredentials({
-        access_token: tokenResult.access_token,
-        refresh_token: tokenResult.refresh_token,
-        token_type: tokenResult.token_type,
-        expiry_date: Date.now() + (tokenResult.expires_in * 1000)
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        token_type: tokens.token_type || 'Bearer',
+        expiry_date: tokens.expiry_date || (Date.now() + (tokens.expires_in || 3600) * 1000),
       });
 
-      notice.setMessage('Authentication successful!');
-      setTimeout(() => notice.hide(), 3000);
+      // Clear PKCE verifier
+      this.pkceVerifier = null;
 
+      notice.setMessage('✅ Authentication successful!');
+      setTimeout(() => notice.hide(), 3000);
     } catch (error) {
-      notice.setMessage(`Authentication failed: ${(error as Error).message}`);
+      console.error('Token exchange failed:', error);
+      notice.setMessage(`❌ Authentication failed: ${(error as Error).message}`);
       setTimeout(() => notice.hide(), 5000);
     }
+  }
+
+  /**
+   * Exchange authorization code for access tokens using Google OAuth2 endpoint
+   * Reuses the same logic as CLI but for plugin environment
+   */
+  private async exchangeCodeForTokens(
+    code: string,
+    codeVerifier: string,
+  ): Promise<any> {
+    // PUBLIC OAuth Client - Intentionally committed for desktop/plugin use
+    // Google requires client_secret even with PKCE (non-standard requirement)  
+    // Security scanner exception: not a leaked secret, this is a public client
+    // gitleaks:allow
+    const PUBLIC_CLIENT_ID = 
+      '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com';
+    // gitleaks:allow
+    const CLIENT_SECRET = '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';
+
+    const tokenRequestBody = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: this.settings.clientId || PUBLIC_CLIENT_ID,
+      client_secret: this.settings.clientSecret || CLIENT_SECRET,
+      code: code,
+      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+      code_verifier: codeVerifier,
+    });
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: tokenRequestBody,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        `Token exchange failed: ${errorData.error_description || errorData.error || response.statusText}`,
+      );
+    }
+
+    const tokens = await response.json();
+
+    // Validate response has required tokens
+    if (!tokens.access_token) {
+      throw new Error('Token exchange successful but no access token received');
+    }
+
+    return {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      token_type: tokens.token_type,
+      expires_in: tokens.expires_in,
+      expiry_date: Date.now() + (tokens.expires_in || 3600) * 1000,
+    };
   }
 
   /**
@@ -1394,7 +1472,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     return this.authManager?.isAuthenticated() || false;
   }
 
-  async getAuthStatus(): Promise<{isAuthenticated: boolean, error?: string, suggestions?: string[], nextSteps?: string[]}> {
+  async getAuthStatus(): Promise<{
+    isAuthenticated: boolean;
+    error?: string;
+    suggestions?: string[];
+    nextSteps?: string[];
+  }> {
     return await this.authManager.getAuthStatus();
   }
 
@@ -1435,7 +1518,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Update status immediately
     this.syncStatusManager.updateFromBackgroundState(
       this.backgroundSyncManager.getSyncStatus() as any,
-      this.settings.backgroundSyncEnabled !== false
+      this.settings.backgroundSyncEnabled !== false,
     );
   }
 
@@ -1449,14 +1532,13 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
 
     new Notice('Starting background sync...', 2000);
-    
+
     try {
       await this.backgroundSyncManager.forceSyncNow();
     } catch (error) {
-      const syncError = SyncErrorClassifier.classifyError(
-        error as Error,
-        { operation: 'force_background_sync' }
-      );
+      const syncError = SyncErrorClassifier.classifyError(error as Error, {
+        operation: 'force_background_sync',
+      });
       this.syncStatusManager.handleSyncError(syncError);
     }
   }
@@ -1467,27 +1549,27 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   showSyncStatus(): void {
     const status = this.backgroundSyncManager.getSyncStatus();
     const currentStatus = this.syncStatusManager.getCurrentStatus();
-    
+
     let message = `**Background Sync Status**\n\n`;
     message += `• Status: ${currentStatus.state} - ${currentStatus.message}\n`;
     message += `• Enabled: ${status.enabled ? 'Yes' : 'No'}\n`;
     message += `• Currently Running: ${status.isRunning ? 'Yes' : 'No'}\n`;
     message += `• Files Queued: ${status.queuedCount}\n`;
     message += `• Failed Files: ${status.failedCount}\n`;
-    
+
     if (status.lastSync) {
       message += `• Last Sync: ${status.lastSync.toLocaleString()}\n`;
     } else {
       message += `• Last Sync: Never\n`;
     }
-    
+
     if (status.nextSyncIn !== null && status.enabled) {
       const nextSyncMinutes = Math.round(status.nextSyncIn / (60 * 1000));
       message += `• Next Sync: ${nextSyncMinutes > 0 ? nextSyncMinutes + ' minutes' : 'Soon'}\n`;
     }
-    
+
     message += `\n**Details:** ${currentStatus.details}`;
-    
+
     if (currentStatus.errorInfo) {
       message += `\n\n**Error Info:**\n`;
       message += `• Type: ${currentStatus.errorInfo.type}\n`;
@@ -1496,7 +1578,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         message += `• Action: ${currentStatus.errorInfo.userAction}\n`;
       }
     }
-    
+
     new Notice(message, 15000);
   }
 }
@@ -1505,39 +1587,37 @@ export default class GoogleDocsSyncPlugin extends Plugin {
  * Modal for successful browser opening with next steps
  */
 class AuthSuccessModal extends Modal {
-  private authUrl: string;
   private onCopyUrl: () => void;
 
-  constructor(app: any, authUrl: string, onCopyUrl: () => void) {
+  constructor(app: any, _authUrl: string, onCopyUrl: () => void) {
     super(app);
-    this.authUrl = authUrl;
     this.onCopyUrl = onCopyUrl;
   }
 
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    
+
     contentEl.createEl('h2', { text: 'Browser Opened Successfully' });
-    
+
     const instructions = contentEl.createDiv({ cls: 'auth-instructions' });
     instructions.createEl('p', { text: '1. Complete the Google authentication in your browser' });
     instructions.createEl('p', { text: '2. Copy the authorization code from the success page' });
     instructions.createEl('p', { text: '3. Return here and paste it when prompted' });
-    
+
     const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-    
-    const copyButton = buttonContainer.createEl('button', { 
+
+    const copyButton = buttonContainer.createEl('button', {
       text: 'Copy Auth URL',
-      cls: 'mod-cta'
+      cls: 'mod-cta',
     });
     copyButton.onclick = () => {
       this.onCopyUrl();
     };
-    
-    const continueButton = buttonContainer.createEl('button', { 
+
+    const continueButton = buttonContainer.createEl('button', {
       text: 'I have the code',
-      cls: 'mod-cta'
+      cls: 'mod-cta',
     });
     continueButton.onclick = () => {
       this.close();
@@ -1546,7 +1626,7 @@ class AuthSuccessModal extends Modal {
         console.log('Auth code received:', code);
       }).open();
     };
-    
+
     const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
     cancelButton.onclick = () => this.close();
   }
@@ -1568,35 +1648,35 @@ class ManualAuthModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    
+
     contentEl.createEl('h2', { text: 'Manual Authentication Required' });
-    
+
     const explanation = contentEl.createDiv({ cls: 'auth-explanation' });
-    explanation.createEl('p', { 
-      text: 'Unable to open browser automatically. Please follow these steps:' 
+    explanation.createEl('p', {
+      text: 'Unable to open browser automatically. Please follow these steps:',
     });
-    
+
     const steps = explanation.createEl('ol');
     steps.createEl('li', { text: 'Copy the authorization URL below' });
     steps.createEl('li', { text: 'Open it in your browser manually' });
     steps.createEl('li', { text: 'Complete the Google authentication' });
     steps.createEl('li', { text: 'Copy the authorization code from the success page' });
     steps.createEl('li', { text: 'Paste it in the field below' });
-    
+
     // URL display with copy button
     const urlContainer = contentEl.createDiv({ cls: 'auth-url-container' });
     urlContainer.createEl('label', { text: 'Authorization URL:' });
-    
-    const urlDisplay = urlContainer.createEl('textarea', { 
+
+    const urlDisplay = urlContainer.createEl('textarea', {
       cls: 'auth-url-display',
-      attr: { readonly: 'true' }
+      attr: { readonly: 'true' },
     });
     urlDisplay.value = this.authUrl;
     urlDisplay.rows = 4;
-    
+
     const copyUrlButton = urlContainer.createEl('button', {
       text: 'Copy URL',
-      cls: 'mod-cta'
+      cls: 'mod-cta',
     });
     copyUrlButton.onclick = async () => {
       try {
@@ -1607,25 +1687,25 @@ class ManualAuthModal extends Modal {
         new Notice('URL selected - press Ctrl+C to copy');
       }
     };
-    
+
     // Auth code input
     const codeContainer = contentEl.createDiv({ cls: 'auth-code-container' });
     codeContainer.createEl('label', { text: 'Authorization Code:' });
-    
+
     const codeInput = codeContainer.createEl('input', {
       type: 'text',
       placeholder: 'Paste your authorization code here...',
-      cls: 'auth-code-input'
+      cls: 'auth-code-input',
     });
-    
+
     // Progress indicator
     const statusDiv = contentEl.createDiv({ cls: 'auth-status' });
-    
+
     const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-    
+
     const submitButton = buttonContainer.createEl('button', {
       text: 'Authenticate',
-      cls: 'mod-cta'
+      cls: 'mod-cta',
     });
     submitButton.onclick = () => {
       const code = codeInput.value.trim();
@@ -1634,17 +1714,17 @@ class ManualAuthModal extends Modal {
         statusDiv.className = 'auth-status error';
         return;
       }
-      
+
       statusDiv.setText('Processing...');
       statusDiv.className = 'auth-status processing';
-      
+
       this.onAuthCode(code);
       this.close();
     };
-    
+
     const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
     cancelButton.onclick = () => this.close();
-    
+
     // Focus on input
     setTimeout(() => codeInput.focus(), 100);
   }
@@ -1664,20 +1744,20 @@ class AuthCodeModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    
+
     contentEl.createEl('h2', { text: 'Enter Authorization Code' });
-    
+
     const input = contentEl.createEl('input', {
       type: 'text',
       placeholder: 'Paste your authorization code here...',
-      cls: 'auth-code-input'
+      cls: 'auth-code-input',
     });
-    
+
     const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-    
+
     const submitButton = buttonContainer.createEl('button', {
       text: 'Submit',
-      cls: 'mod-cta'
+      cls: 'mod-cta',
     });
     submitButton.onclick = () => {
       const code = input.value.trim();
@@ -1686,10 +1766,10 @@ class AuthCodeModal extends Modal {
         this.close();
       }
     };
-    
+
     const cancelButton = buttonContainer.createEl('button', { text: 'Cancel' });
     cancelButton.onclick = () => this.close();
-    
+
     input.focus();
   }
 }

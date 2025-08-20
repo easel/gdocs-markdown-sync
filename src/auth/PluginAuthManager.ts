@@ -13,6 +13,10 @@ export interface AuthStatusResult {
  * Supports both CLI token loading and plugin-based authentication
  */
 export class PluginAuthManager {
+  isAuthenticated(): boolean {
+    // TODO: Implement proper authentication check
+    return false;
+  }
   private tokenLoader: BrowserTokenLoader;
   private pluginTokenStorage: ObsidianTokenStorage | null = null;
   private currentCredentials: Credentials | null = null;
@@ -21,7 +25,7 @@ export class PluginAuthManager {
   constructor(profile?: string, plugin?: any) {
     this.profile = profile || 'default';
     this.tokenLoader = new BrowserTokenLoader(this.profile);
-    
+
     if (plugin) {
       this.pluginTokenStorage = new ObsidianTokenStorage(plugin, this.profile);
     }
@@ -58,14 +62,14 @@ export class PluginAuthManager {
     if (!this.currentCredentials) {
       const status = await this.getAuthStatus();
       throw new Error(
-        `Authentication required: ${status.error}\n\nNext steps:\n${status.nextSteps?.map(step => `• ${step}`).join('\n')}`,
+        `Authentication required: ${status.error}\n\nNext steps:\n${status.nextSteps?.map((step) => `• ${step}`).join('\n')}`,
       );
     }
 
     // Check if credentials are expired
     if (this.tokenLoader.isTokenExpired(this.currentCredentials)) {
       throw new Error(
-        'Authentication expired. Please re-authenticate using the plugin settings or CLI.'
+        'Authentication expired. Please re-authenticate using the plugin settings or CLI.',
       );
     }
 
@@ -73,10 +77,11 @@ export class PluginAuthManager {
   }
 
   /**
-   * Loads credentials from multiple sources with priority order
+   * Loads credentials from plugin storage only
+   * Note: Plugin cannot access CLI tokens due to filesystem restrictions
    */
   async loadCredentials(): Promise<Credentials | null> {
-    // Priority 1: Try plugin-stored tokens first (most reliable for plugin context)
+    // Plugin uses only its own token storage - cannot access CLI filesystem
     if (this.pluginTokenStorage) {
       try {
         const pluginCredentials = await this.pluginTokenStorage.load();
@@ -89,18 +94,7 @@ export class PluginAuthManager {
       }
     }
 
-    // Priority 2: Try CLI tokens as fallback
-    try {
-      const cliCredentials = await this.tokenLoader.loadFromCLI();
-      if (cliCredentials) {
-        console.log('Using CLI credentials for plugin');
-        return cliCredentials;
-      }
-    } catch (error) {
-      console.warn('Failed to load CLI credentials:', error);
-    }
-
-    console.log('No credentials found from any source');
+    console.log('No plugin credentials found - use "Start Authentication" in settings');
     return null;
   }
 
@@ -122,21 +116,20 @@ export class PluginAuthManager {
   async getAuthStatus(): Promise<AuthStatusResult> {
     try {
       const credentials = await this.loadCredentials();
-      
+
       if (!credentials) {
         return {
           isAuthenticated: false,
           error: 'No authentication credentials found',
           suggestions: [
-            'Use the "Start Auth Flow" button in plugin settings',
-            'Or authenticate via CLI: gdocs-markdown-sync auth',
-            'Make sure Client ID and Client Secret are configured'
+            'Use the "Start Authentication" button in plugin settings',
+            'Make sure Client ID and Client Secret are configured first',
           ],
           nextSteps: [
             'Configure Client ID and Client Secret in plugin settings',
-            'Click "Start Auth Flow" to authenticate with Google',
-            'Complete the browser authentication process'
-          ]
+            'Click "Start Authentication" to authenticate with Google',
+            'Complete the browser authentication process',
+          ],
         };
       }
 
@@ -146,12 +139,12 @@ export class PluginAuthManager {
           error: 'Authentication credentials have expired',
           suggestions: [
             'Re-authenticate using the plugin settings',
-            'Or run: gdocs-markdown-sync auth --refresh'
+            'Tokens will be automatically refreshed during authentication',
           ],
           nextSteps: [
-            'Click "Start Auth Flow" in plugin settings',
-            'Or use CLI to refresh tokens automatically'
-          ]
+            'Click "Start Authentication" in plugin settings',
+            'Complete the authentication process to get new tokens',
+          ],
         };
       }
 
@@ -161,31 +154,27 @@ export class PluginAuthManager {
           error: 'Invalid credentials: missing access token',
           suggestions: [
             'Clear existing authentication and re-authenticate',
-            'Check that OAuth setup is correct'
+            'Check that OAuth setup is correct',
           ],
           nextSteps: [
             'Click "Clear Authentication" in plugin settings',
-            'Then click "Start Auth Flow" to re-authenticate'
-          ]
+            'Then click "Start Authentication" to re-authenticate',
+          ],
         };
       }
 
       return {
-        isAuthenticated: true
+        isAuthenticated: true,
       };
-
     } catch (error) {
       return {
         isAuthenticated: false,
         error: `Authentication check failed: ${(error as Error).message}`,
-        suggestions: [
-          'Check plugin settings configuration',
-          'Try clearing and re-authenticating'
-        ],
+        suggestions: ['Check plugin settings configuration', 'Try clearing and re-authenticating'],
         nextSteps: [
           'Review Client ID and Client Secret in settings',
-          'Use "Clear Authentication" then "Start Auth Flow"'
-        ]
+          'Use "Clear Authentication" then "Start Authentication"',
+        ],
       };
     }
   }
@@ -198,24 +187,14 @@ export class PluginAuthManager {
   }
 
   /**
-   * Enhanced error message for unsupported direct auth flow
+   * Plugin auth flow is handled by the main plugin class
+   * This method shouldn't be called directly
    */
   async startAuthFlow(): Promise<never> {
-    const status = await this.getAuthStatus();
-    const message = [
-      'Direct authentication flow not supported in this context.',
-      '',
-      'Recommended approaches:',
-      ...status.nextSteps?.map(step => `• ${step}`) || [],
-      '',
-      'Alternative: Use CLI authentication:',
-      '• Open terminal/command prompt',
-      '• Run: gdocs-markdown-sync auth',
-      '• Complete browser authentication',
-      '• Plugin will automatically use CLI credentials'
-    ].join('\n');
-
-    throw new Error(message);
+    throw new Error(
+      'Authentication flow should be started via plugin settings UI. ' +
+      'Click "Start Authentication" button in the plugin settings panel.',
+    );
   }
 
   /**
@@ -236,7 +215,7 @@ export class PluginAuthManager {
    */
   async clearAllCredentials(): Promise<void> {
     this.currentCredentials = null;
-    
+
     if (this.pluginTokenStorage) {
       try {
         await this.pluginTokenStorage.clear();

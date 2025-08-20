@@ -102,11 +102,30 @@ export const getBuildVersion = () => VERSION_INFO.fullVersion;
   console.log(`Build version: ${versionInfo.fullVersion}`);
 }
 
+async function updateManifestVersion(version: string): Promise<void> {
+  try {
+    const manifestPath = path.join(process.cwd(), 'manifest.json');
+    const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+    const manifest = JSON.parse(manifestContent);
+
+    if (manifest.version !== version) {
+      manifest.version = version;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+      console.log(`Updated manifest.json version to: ${version}`);
+    } else {
+      console.log(`Manifest version already correct: ${version}`);
+    }
+  } catch (error) {
+    console.warn('Could not update manifest.json version:', error);
+  }
+}
+
 // Main execution
 async function main() {
   try {
     const versionInfo = await generateVersionInfo();
     await writeVersionFile(versionInfo);
+    await updateManifestVersion(versionInfo.version);
   } catch (error) {
     console.error('Failed to generate version:', error);
     process.exit(1);

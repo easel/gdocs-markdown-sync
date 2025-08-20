@@ -6,7 +6,7 @@ A complete TypeScript solution for bidirectional synchronization between Google 
 
 - **🔐 Secure PKCE OAuth 2.0** - No client secrets required!
 - **🔄 Bidirectional Sync** - Pull from Google Docs, push Markdown back
-- **⚔️ Conflict Resolution** - Three policies: prefer-doc, prefer-md, merge
+- **⚔️ Intelligent Conflict Resolution** - Smart 3-way merge with automatic and manual resolution modes
 - **📝 Frontmatter Integration** - Automatic docId/revision tracking
 - **🚫 Ignore File Support** - `.gdocs-sync-ignore` with .gitignore syntax
 - **🕐 Polling Support** - Continuous sync with configurable intervals
@@ -99,6 +99,85 @@ After installation (see above), enable "Google Docs Sync" in Obsidian → Settin
 - `--poll-interval <seconds>` - Custom polling interval (default: 300s)
 - `--conflicts <policy>` - Conflict resolution: prefer-doc|prefer-md|merge
 
+## Conflict Resolution
+
+The system provides intelligent conflict resolution using 3-way merge technology that compares local changes, remote changes, and the last known sync state to make smart decisions about how to handle conflicts.
+
+### Conflict Detection
+
+The system automatically detects four types of scenarios:
+
+1. **No Conflict** - Files are identical or no changes since last sync
+2. **Local Only** - Only the local Markdown file has changes (auto-resolves with push)
+3. **Remote Only** - Only the Google Doc has changes (auto-resolves with pull)
+4. **Both Changed** - Both files have changes since last sync (requires policy resolution)
+
+### Resolution Policies
+
+Choose how conflicts are resolved with the `--conflicts` flag:
+
+#### `prefer-doc` (Default)
+
+```bash
+gdocs-markdown-sync sync --conflicts prefer-doc --drive-folder "My Docs" --local-dir ./docs
+```
+
+- Always uses the Google Doc version when conflicts occur
+- Local changes are overwritten with remote content
+- Safe choice when Google Docs is the primary editing location
+
+#### `prefer-md`
+
+```bash
+gdocs-markdown-sync sync --conflicts prefer-md --drive-folder "My Docs" --local-dir ./docs
+```
+
+- Always uses the Markdown file version when conflicts occur
+- Remote Google Doc is updated with local content
+- Good choice when local Markdown files are the primary editing location
+
+#### `merge`
+
+```bash
+gdocs-markdown-sync sync --conflicts merge --drive-folder "My Docs" --local-dir ./docs
+```
+
+- Attempts intelligent automatic merging of non-conflicting changes
+- Successfully merges when one version extends the other (e.g., added paragraphs)
+- Falls back to conflict markers for manual resolution when automatic merge isn't possible
+
+### Manual Resolution
+
+When automatic merging fails, the system creates clear conflict markers in your Markdown files:
+
+```markdown
+Your content here...
+
+<<<<<<< LOCAL (Modified: 2023-01-01T10:00:00Z)
+This is the local version of the conflicting section.
+=======
+
+> > > > > > > REMOTE (Modified: 2023-01-01T11:00:00Z)
+> > > > > > > This is the Google Doc version of the conflicting section.
+> > > > > > > END CONFLICT (Generated: 2023-01-01T12:00:00Z)
+
+More content here...
+```
+
+To resolve:
+
+1. Edit the file to choose which version to keep (or combine them)
+2. Remove all conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+3. Run sync again - the system will detect the resolved conflict and proceed
+
+### Preview Mode
+
+Use `--dry-run` to see what changes would be made without actually modifying files:
+
+```bash
+gdocs-markdown-sync sync --dry-run --conflicts merge --drive-folder "My Docs" --local-dir ./docs
+```
+
 ## Ignore Files
 
 Create a `.gdocs-sync-ignore` file in your vault root to exclude files from sync. Uses the same syntax as `.gitignore`:
@@ -189,6 +268,9 @@ bun run build:cli
 
 # Build Obsidian plugin
 bun run build:plugin
+
+# Package plugin for distribution (creates dist/plugin.zip)
+bun run package:plugin
 
 # Run in development mode
 bun run dev
