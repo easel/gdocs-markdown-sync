@@ -1,6 +1,7 @@
 import { Plugin, TFile, Notice, Menu, WorkspaceLeaf, MarkdownView, Modal } from 'obsidian';
 
 import { PluginAuthManager } from './auth/PluginAuthManager';
+import { UnifiedOAuthManager } from './auth/UnifiedOAuthManager';
 import { DriveAPI, GoogleDocInfo } from './drive/DriveAPI';
 import { parseFrontMatter, buildFrontMatter } from './fs/frontmatter';
 import { GoogleDocsSyncSettingsTab } from './settings';
@@ -304,6 +305,17 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   private authManager!: PluginAuthManager;
   private driveAPICache: { api: DriveAPI; timestamp: number } | null = null;
   private readonly DRIVE_API_CACHE_TTL = 60000; // 1 minute cache
+  private workspaceInfo: { 
+    email: string; 
+    displayName: string; 
+    domain: string; 
+    lastVerified: Date;
+    folderAccess?: {
+      folderId: string;
+      folderName: string;
+      documentCount: number;
+    };
+  } | null = null;
   async onload() {
     console.log(`🚀 Loading Google Docs Sync plugin ${PLUGIN_VERSION}`);
     console.log(`📊 Plugin Details: version=${PLUGIN_VERSION_DETAILS.version}, commit=${PLUGIN_VERSION_DETAILS.commit}, dirty=${PLUGIN_VERSION_DETAILS.isDirty}, buildTime=${PLUGIN_VERSION_DETAILS.buildTime}`);
@@ -312,6 +324,9 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
     // Initialize auth manager with plugin instance for token storage
     this.authManager = new PluginAuthManager(this.settings.profile, this);
+
+    // Verify workspace and token validity on startup
+    await this.verifyWorkspaceAndToken();
 
     this.changeDetector = new ChangeDetector(this);
     this.syncService = createSyncService(this.settings);
@@ -415,6 +430,29 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       callback: () => this.showRestoreModal(),
     });
 
+    this.addCommand({
+      id: 'clean-cross-workspace-links',
+      name: 'Clean Cross-Workspace Document Links',
+      callback: () => this.cleanCrossWorkspaceLinks(),
+    });
+
+    this.addCommand({
+      id: 'migrate-misplaced-folders',
+      name: 'Migrate Misplaced Folders to Correct Location',
+      callback: () => this.migrateMisplacedFolders(),
+    });
+
+    this.addCommand({
+      id: 'diagnose-workspace-access',
+      name: 'Diagnose Workspace & Document Access',
+      callback: () => this.diagnoseWorkspaceAccess(),
+    });
+
+    this.addCommand({
+      id: 'switch-to-document-folder',
+      name: 'Switch to Folder Where Documents Are Located',
+      callback: () => this.switchToDocumentFolder(),
+    });
 
     // Add context menu items
     this.registerEvent(
@@ -513,6 +551,130 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
 
     new Notice(`Google Docs Sync plugin loaded (${PLUGIN_VERSION})`);
+  }
+
+  /**
+   * Verify workspace and token validity on startup
+   * Logs workspace information to help diagnose authentication issues
+   */
+  private async verifyWorkspaceAndToken(): Promise<void> {
+    try {
+      console.log('🔐 Verifying workspace and token validity...');
+      
+      // Get authenticated Drive API instance
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      // Test basic API access by getting user info from Drive
+      console.log('📊 Testing Drive API access...');
+      const testResponse = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+        headers: {
+          'Authorization': `Bearer ${driveAPI.getAccessToken()}`,
+        },
+      });
+      
+      if (testResponse.ok) {
+        const userInfo = await testResponse.json();
+        console.log('✅ Authentication successful!');
+        console.log(`👤 Authenticated as: ${userInfo.user?.displayName || 'Unknown'} (${userInfo.user?.emailAddress || 'Unknown email'})`);
+        
+        // Store workspace information
+        const email = userInfo.user?.emailAddress || 'Unknown email';
+        const displayName = userInfo.user?.displayName || 'Unknown';
+        const domain = email.includes('@') ? email.split('@')[1] : 'Unknown domain';
+        
+        this.workspaceInfo = {
+          email,
+          displayName,
+          domain,
+          lastVerified: new Date()
+        };
+        
+        console.log(`🏢 Workspace Domain: ${domain}`);
+        console.log(`🆔 Workspace Email: ${email}`);
+        
+        // Test access to configured folder if available
+        if (this.settings.driveFolderId && this.settings.driveFolderId.trim() !== '') {
+          try {
+            console.log(`📁 Testing access to configured folder: ${this.settings.driveFolderId}`);
+            const folderInfo = await driveAPI.getFile(this.settings.driveFolderId);
+            console.log(`✅ Folder accessible: "${folderInfo.name || 'Unnamed folder'}" (${this.settings.driveFolderId})`);
+            console.log(`📊 Folder metadata:`, {
+              id: folderInfo.id,
+              name: folderInfo.name,
+              parents: folderInfo.parents || [],
+              mimeType: folderInfo.mimeType,
+              modifiedTime: folderInfo.modifiedTime,
+              driveId: folderInfo.driveId
+            });
+            
+            // Store folder access information
+            if (this.workspaceInfo) {
+              this.workspaceInfo.folderAccess = {
+                folderId: this.settings.driveFolderId,
+                folderName: folderInfo.name || 'Unnamed folder',
+                documentCount: 0 // Will be updated below
+              };
+            }
+            
+            // Test specific document search within this folder
+            console.log(`🔍 Testing document search within folder...`);
+            try {
+              const testDocs = await driveAPI.listDocsInFolder(this.settings.driveFolderId);
+              console.log(`📄 Found ${testDocs.length} documents in folder via listDocsInFolder`);
+              
+              // Update document count
+              if (this.workspaceInfo?.folderAccess) {
+                this.workspaceInfo.folderAccess.documentCount = testDocs.length;
+              }
+              
+              // Search specifically for "The Synaptitudes"
+              console.log(`🎯 Searching specifically for "The Synaptitudes" document...`);
+              const searchResults = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent('name contains "Synaptitudes"')}&fields=files(id,name,parents,mimeType)&supportsAllDrives=true&includeItemsFromAllDrives=true`, {
+                headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+              });
+              const searchData = await searchResults.json();
+              console.log(`🔎 Search results for "Synaptitudes":`, searchData.files || []);
+              
+              // Investigate specific documents mentioned in logs that have wrong parents
+              console.log(`🔍 Investigating specific documents with wrong parent IDs...`);
+              const problematicDocIds = [
+                '1mb9LbmIddZJMG8qwQfwwTRA0L5P9qS2oRceNEncrPHY', // AGENTS
+                '1axapQBfsY45J3QaKf_CjJL0xZMZN9Hf6VovSWDFZNa4', // README
+                '18dEGqLFKfAIYl7p4z_2nb9s8cGNuvGcvWE0AG4JO4Ec', // obsidian-google-docs-workflow
+                '1oO6tSfJx4CZ3hYd0a4v-xg-kBazkXafd-gL6w1lSwY4', // SECURITY
+              ];
+              await driveAPI.investigateDocumentParents(problematicDocIds);
+              
+            } catch (searchError) {
+              console.warn(`⚠️ Error during document search:`, searchError);
+            }
+            
+          } catch (error) {
+            console.warn(`⚠️  Cannot access configured folder ${this.settings.driveFolderId}:`, error);
+            console.log('💡 This may indicate the folder is in a different workspace or the folder ID is incorrect');
+            
+            // Additional diagnostic - try to understand the error better
+            if (error instanceof Error) {
+              console.log(`🔍 Error details:`, {
+                message: error.message,
+                name: error.name,
+                stack: error.stack?.split('\n').slice(0, 3)
+              });
+            }
+          }
+        } else {
+          console.log('ℹ️  No Drive folder configured yet');
+        }
+        
+      } else {
+        console.error('❌ Authentication failed:', testResponse.status, testResponse.statusText);
+        console.log('💡 Token may be invalid or expired. Try reauthenticating in plugin settings.');
+      }
+      
+    } catch (error) {
+      console.error('❌ Workspace verification failed:', error);
+      console.log('💡 This may indicate authentication issues. Check plugin settings and reauth if needed.');
+    }
   }
 
   async onunload() {
@@ -1841,6 +2003,13 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   /**
+   * Get current workspace information
+   */
+  getWorkspaceInfo() {
+    return this.workspaceInfo;
+  }
+
+  /**
    * Discover and categorize local files in the vault
    */
   async discoverLocalFiles(): Promise<{
@@ -2061,6 +2230,80 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Process linked local files (files with google-doc-id)
     for (const localLinked of localState.linked) {
       const remoteDoc = remoteById.get(localLinked.docId);
+      
+      // Validate that the document belongs to the current workspace
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      const isValidWorkspace = await driveAPI.validateDocumentInCurrentWorkspace(localLinked.docId);
+      
+      if (!isValidWorkspace) {
+        const handleCrossWorkspace = this.settings.handleCrossWorkspaceDocs || 'auto-relink';
+        console.log(`🚫 Document ${localLinked.docId} not accessible in current workspace, handling with policy: ${handleCrossWorkspace}`);
+        
+        if (handleCrossWorkspace === 'skip') {
+          console.log(`⏭️ Skipping ${localLinked.path} (cross-workspace document, skip policy)`);
+          continue;
+        } else if (handleCrossWorkspace === 'warn') {
+          console.log(`⚠️ Warning: ${localLinked.path} has cross-workspace document, skipping sync`);
+          warnings.push({
+            type: 'suspicious-pattern',
+            message: `Document ${localLinked.docId} belongs to different workspace: ${localLinked.path}`,
+            details: { path: localLinked.path, oldDocId: localLinked.docId, reason: 'cross-workspace-document-warning' }
+          });
+          continue;
+        } else if (handleCrossWorkspace === 'auto-relink') {
+          console.log(`🔗 Attempting to auto-relink ${localLinked.path} by name...`);
+          
+          // Try to find a document with the same name in the current workspace
+          const expectedFileName = localLinked.file.name.replace(/\.md$/, '');
+          const expectedPath = localLinked.path.replace(/\.md$/, '');
+          
+          const nameMatchedDoc = remoteState.docs.find(doc => {
+            const docPath = doc.relativePath === '(root)' ? doc.name : `${doc.relativePath}/${doc.name}`;
+            return doc.name === expectedFileName || docPath === expectedPath;
+          });
+          
+          if (nameMatchedDoc) {
+            console.log(`🔗 Auto-relinking ${localLinked.path}: wrong workspace ID ${localLinked.docId} → correct ID ${nameMatchedDoc.id}`);
+            
+            // Re-link to the document in the current workspace
+            pushToRemote.push({
+              localFile: localLinked.file,
+              action: 'update',
+              reason: `Auto-relinking to document in current workspace (ID changed from ${localLinked.docId} to ${nameMatchedDoc.id})`
+            });
+            
+            // Update lookup maps
+            localByDocId.delete(localLinked.docId);
+            localByDocId.set(nameMatchedDoc.id, { ...localLinked, docId: nameMatchedDoc.id });
+            
+            warnings.push({
+              type: 'suspicious-pattern',
+              message: `Auto-relinked cross-workspace document: ${localLinked.path}`,
+              details: { path: localLinked.path, oldDocId: localLinked.docId, newDocId: nameMatchedDoc.id, reason: 'cross-workspace-auto-relink' }
+            });
+            
+            // Continue processing with the new valid document
+            continue;
+          } else {
+            console.log(`⚠️ No matching document found for ${localLinked.path} in current workspace, treating as new document`);
+            
+            // Treat as new document to be created
+            pushToRemote.push({
+              localFile: localLinked.file,
+              action: 'create',
+              reason: `Document ID ${localLinked.docId} belongs to different workspace, no matching document found - creating new document`
+            });
+            
+            warnings.push({
+              type: 'suspicious-pattern',
+              message: `Cross-workspace document ${localLinked.docId} cleared from ${localLinked.path}, will create new document`,
+              details: { path: localLinked.path, oldDocId: localLinked.docId, reason: 'cross-workspace-document-cleared' }
+            });
+            
+            continue;
+          }
+        }
+      }
       
       if (remoteDoc) {
         // Both local and remote exist - check for updates needed
@@ -2732,7 +2975,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   /**
-   * Start authentication flow with enhanced UX
+   * Start authentication flow using UnifiedOAuthManager
    */
   async startAuthFlow(): Promise<void> {
     // Check if credentials are configured first
@@ -2749,16 +2992,25 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         return;
       }
 
-      // Generate OAuth URL with PKCE parameters
-      const authUrl = await this.generateAuthUrl();
+      // Create UnifiedOAuthManager with plugin settings
+      const { ObsidianTokenStorage } = await import('./auth/ObsidianTokenStorage');
+      const tokenStorage = new ObsidianTokenStorage(this, this.authManager.profile || 'default');
+      const oauthManager = new UnifiedOAuthManager(tokenStorage, {
+        clientId: this.settings.clientId,
+        clientSecret: this.settings.clientSecret,
+      });
+
+      // Get authorization URL with PKCE parameters
+      const { url: authUrl, codeVerifier } = await oauthManager.getAuthorizationUrl();
+      this.pkceVerifier = codeVerifier;
 
       // Try to open browser with fallback strategies
       const browserOpened = await this.tryOpenBrowser(authUrl);
 
       // Always show the unified auth modal that assumes browser opened
       // but provides fallback for manual opening
-      new UnifiedAuthModal(this.app, authUrl, (authCode: string) => {
-        this.handleAuthCallback(authCode);
+      new UnifiedAuthModal(this.app, authUrl, async (authCode: string) => {
+        await this.handleAuthCallback(authCode, oauthManager);
       }).open();
     } catch (error) {
       console.error('Auth flow failed:', error);
@@ -2770,57 +3022,9 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   private pkceVerifier: string | null = null;
 
   /**
-   * Generate OAuth authorization URL with PKCE
+   * Handle auth callback with authorization code using UnifiedOAuthManager
    */
-  private async generateAuthUrl(): Promise<string> {
-    // Generate PKCE challenge/verifier pair
-    const { codeVerifier, codeChallenge } = await this.generatePKCE();
-    this.pkceVerifier = codeVerifier;
-
-    const params = new URLSearchParams({
-      client_id: this.settings.clientId || '',
-      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', // For manual code entry
-      scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
-      response_type: 'code',
-      access_type: 'offline',
-      prompt: 'consent',
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-    });
-
-    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  }
-
-  /**
-   * Generate PKCE challenge and verifier for browser environment
-   */
-  private async generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: string }> {
-    // Generate cryptographically secure random verifier
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    const codeVerifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
-
-    // Create SHA256 challenge from verifier
-    const encoder = new TextEncoder();
-    const data = encoder.encode(codeVerifier);
-    
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = new Uint8Array(hashBuffer);
-    const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
-    
-    return { codeVerifier, codeChallenge };
-  }
-
-  /**
-   * Handle auth callback with authorization code
-   */
-  private async handleAuthCallback(authCode: string): Promise<void> {
+  private async handleAuthCallback(authCode: string, oauthManager: any): Promise<void> {
     const notice = new Notice('Exchanging authorization code...', 0);
 
     try {
@@ -2828,17 +3032,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         throw new Error('PKCE verifier not found. Please restart the authentication flow.');
       }
 
-      // Exchange authorization code for tokens using Google OAuth endpoint
-      const tokens = await this.exchangeCodeForTokens(authCode, this.pkceVerifier);
-
-      // Store tokens using Obsidian plugin storage
-      const credentials = {
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        token_type: tokens.token_type || 'Bearer',
-        scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
-        expiry_date: tokens.expiry_date || (Date.now() + (tokens.expires_in || 3600) * 1000),
-      };
+      // Exchange authorization code for tokens using UnifiedOAuthManager
+      const credentials = await oauthManager.exchangeCodeForTokens(authCode, this.pkceVerifier);
 
       // Validate credentials before storing
       if (!credentials.access_token || !credentials.refresh_token) {
@@ -2862,63 +3057,6 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       notice.setMessage(`❌ Authentication failed: ${(error as Error).message}`);
       setTimeout(() => notice.hide(), 5000);
     }
-  }
-
-  /**
-   * Exchange authorization code for access tokens using Google OAuth2 endpoint
-   * Reuses the same logic as CLI but for plugin environment
-   */
-  private async exchangeCodeForTokens(
-    code: string,
-    codeVerifier: string,
-  ): Promise<any> {
-    // PUBLIC OAuth Client - Intentionally committed for desktop/plugin use
-    // Google requires client_secret even with PKCE (non-standard requirement)  
-    // Security scanner exception: not a leaked secret, this is a public client
-    // gitleaks:allow
-    const PUBLIC_CLIENT_ID = 
-      '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com';
-    // gitleaks:allow
-    const CLIENT_SECRET = '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';
-
-    const tokenRequestBody = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: this.settings.clientId || PUBLIC_CLIENT_ID,
-      client_secret: this.settings.clientSecret || CLIENT_SECRET,
-      code: code,
-      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
-      code_verifier: codeVerifier,
-    });
-
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: tokenRequestBody,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(
-        `Token exchange failed: ${errorData.error_description || errorData.error || response.statusText}`,
-      );
-    }
-
-    const tokens = await response.json();
-
-    // Validate response has required tokens
-    if (!tokens.access_token) {
-      throw new Error('Token exchange successful but no access token received');
-    }
-
-    return {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      token_type: tokens.token_type,
-      expires_in: tokens.expires_in,
-      expiry_date: Date.now() + (tokens.expires_in || 3600) * 1000,
-    };
   }
 
   /**
@@ -3735,6 +3873,444 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     } catch (error) {
       console.error('Failed to show restore modal:', error);
       new Notice('Failed to show restore options');
+    }
+  }
+
+  /**
+   * Clean cross-workspace document links from all markdown files
+   */
+  async cleanCrossWorkspaceLinks(): Promise<void> {
+    try {
+      console.log('🧹 Starting cross-workspace document link cleaning...');
+      
+      const localState = await this.discoverLocalFiles();
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      let cleanedCount = 0;
+      let checkedCount = 0;
+      
+      for (const localLinked of localState.linked) {
+        checkedCount++;
+        console.log(`🔍 Checking document ${localLinked.docId} in ${localLinked.path}...`);
+        
+        const isValidWorkspace = await driveAPI.validateDocumentInCurrentWorkspace(localLinked.docId);
+        
+        if (!isValidWorkspace) {
+          console.log(`🚫 Document ${localLinked.docId} not in current workspace, cleaning from ${localLinked.path}`);
+          
+          // Read the file content
+          const content = await this.app.vault.read(localLinked.file);
+          
+          // Remove the google-doc-id from frontmatter
+          const updatedContent = this.removeFrontmatterField(content, 'google-doc-id');
+          
+          // Also remove other related fields
+          const finalContent = this.removeFrontmatterField(
+            this.removeFrontmatterField(
+              this.removeFrontmatterField(updatedContent, 'google-doc-url'),
+              'google-doc-title'
+            ),
+            'last-synced'
+          );
+          
+          // Write the updated content back
+          await this.app.vault.modify(localLinked.file, finalContent);
+          
+          cleanedCount++;
+          console.log(`✅ Cleaned cross-workspace link from ${localLinked.path}`);
+        }
+      }
+      
+      const message = `Cross-workspace link cleanup complete!\nChecked: ${checkedCount} files\nCleaned: ${cleanedCount} files`;
+      console.log(`🧹 ${message}`);
+      new Notice(message, 5000);
+      
+    } catch (error) {
+      console.error('Failed to clean cross-workspace links:', error);
+      new Notice(`Failed to clean cross-workspace links: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Remove a specific field from YAML frontmatter
+   */
+  private removeFrontmatterField(content: string, fieldName: string): string {
+    const lines = content.split('\n');
+    const result: string[] = [];
+    let inFrontmatter = false;
+    let frontmatterEnded = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      if (i === 0 && line === '---') {
+        inFrontmatter = true;
+        result.push(line);
+        continue;
+      }
+      
+      if (inFrontmatter && line === '---') {
+        frontmatterEnded = true;
+        inFrontmatter = false;
+        result.push(line);
+        continue;
+      }
+      
+      if (inFrontmatter) {
+        // Check if this line contains the field we want to remove
+        const trimmed = line.trim();
+        if (trimmed.startsWith(`${fieldName}:`) || trimmed.startsWith(`'${fieldName}':`) || trimmed.startsWith(`"${fieldName}":`)) {
+          // Skip this line (remove the field)
+          console.log(`Removing field: ${fieldName} from line: ${line}`);
+          continue;
+        }
+      }
+      
+      result.push(line);
+    }
+    
+    return result.join('\n');
+  }
+
+  /**
+   * Migrate folders that were incorrectly created in Google Drive root
+   * to the proper Synaptiq Ops folder location
+   */
+  async migrateMisplacedFolders(): Promise<void> {
+    try {
+      console.log('📁 Starting folder migration from Google Drive root...');
+      
+      if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
+        const message = 'No target folder configured. Please set the Synaptiq Ops folder ID in settings first.';
+        console.error('❌ ' + message);
+        new Notice(message, 5000);
+        return;
+      }
+
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      const targetFolderId = this.settings.driveFolderId;
+      
+      console.log(`🎯 Target folder: ${targetFolderId}`);
+      
+      // Get folders from the root that might belong in our target folder
+      console.log('🔍 Searching for folders in Google Drive root...');
+      const rootFolders = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent('mimeType="application/vnd.google-apps.folder" and "root" in parents')}&fields=files(id,name,parents,modifiedTime)&supportsAllDrives=true&includeItemsFromAllDrives=true`, {
+        headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+      });
+      
+      if (!rootFolders.ok) {
+        throw new Error(`Failed to search root folders: ${rootFolders.status} ${rootFolders.statusText}`);
+      }
+      
+      const rootFoldersData = await rootFolders.json();
+      const misplacedFolders = rootFoldersData.files || [];
+      
+      console.log(`📂 Found ${misplacedFolders.length} folders in root`);
+      
+      if (misplacedFolders.length === 0) {
+        const message = 'No folders found in Google Drive root to migrate.';
+        console.log('✅ ' + message);
+        new Notice(message, 3000);
+        return;
+      }
+      
+      let migratedCount = 0;
+      let skippedCount = 0;
+      
+      for (const folder of misplacedFolders) {
+        console.log(`🔍 Examining folder: "${folder.name}" (${folder.id})`);
+        
+        // Skip system/default folders that should stay in root
+        const systemFolders = ['My Drive', 'Shared drives', 'Computers', 'Trash'];
+        if (systemFolders.includes(folder.name)) {
+          console.log(`⏭️  Skipping system folder: ${folder.name}`);
+          skippedCount++;
+          continue;
+        }
+        
+        // Check if this folder contains any Google Docs that might be related to our workspace
+        try {
+          const docsInFolder = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`mimeType="application/vnd.google-apps.document" and "${folder.id}" in parents`)}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`, {
+            headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+          });
+          
+          if (docsInFolder.ok) {
+            const docsData = await docsInFolder.json();
+            const docCount = docsData.files?.length || 0;
+            
+            if (docCount > 0) {
+              console.log(`📄 Folder "${folder.name}" contains ${docCount} documents, migrating...`);
+              
+              // Move the folder to the target location
+              await fetch(`https://www.googleapis.com/drive/v3/files/${folder.id}?addParents=${encodeURIComponent(targetFolderId)}&removeParents=root&supportsAllDrives=true`, {
+                method: 'PATCH',
+                headers: { 
+                  'Authorization': `Bearer ${driveAPI.getAccessToken()}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+              
+              console.log(`✅ Migrated folder "${folder.name}" (${folder.id}) to target folder`);
+              migratedCount++;
+            } else {
+              console.log(`📭 Folder "${folder.name}" is empty, skipping`);
+              skippedCount++;
+            }
+          }
+        } catch (error) {
+          console.warn(`⚠️ Error checking contents of folder "${folder.name}":`, error);
+          skippedCount++;
+        }
+      }
+      
+      const message = `Folder migration complete!\nMigrated: ${migratedCount} folders\nSkipped: ${skippedCount} folders`;
+      console.log(`📁 ${message}`);
+      new Notice(message, 5000);
+      
+    } catch (error) {
+      console.error('Failed to migrate folders:', error);
+      new Notice(`Failed to migrate folders: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Diagnose workspace access and document parent folder issues
+   */
+  async diagnoseWorkspaceAccess(): Promise<void> {
+    try {
+      console.log('🔍 Starting workspace access diagnosis...');
+      
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      // Get user info and workspace details
+      console.log('👤 Getting authenticated user information...');
+      const userResponse = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+        headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+      });
+      
+      if (!userResponse.ok) {
+        throw new Error(`Failed to get user info: ${userResponse.status} ${userResponse.statusText}`);
+      }
+      
+      const userInfo = await userResponse.json();
+      const email = userInfo.user?.emailAddress || 'Unknown';
+      const displayName = userInfo.user?.displayName || 'Unknown';
+      const domain = email.includes('@') ? email.split('@')[1] : 'Unknown';
+      
+      console.log('🏢 Current Workspace Information:');
+      console.log(`   📧 Email: ${email}`);
+      console.log(`   👤 Name: ${displayName}`);
+      console.log(`   🌐 Domain: ${domain}`);
+      console.log(`   💾 Storage Used: ${userInfo.storageQuota?.usage || 'Unknown'} bytes`);
+      
+      // Check target folder access
+      const targetFolderId = this.settings.driveFolderId;
+      console.log(`\n🎯 Target Folder Analysis:`);
+      console.log(`   📁 Configured ID: ${targetFolderId || 'Not configured'}`);
+      
+      if (targetFolderId) {
+        try {
+          const folderInfo = await driveAPI.getFile(targetFolderId);
+          console.log(`   ✅ Folder accessible: "${folderInfo.name}"`);
+          console.log(`   📂 Parents: ${JSON.stringify(folderInfo.parents || [])}`);
+        } catch (error) {
+          console.log(`   ❌ Cannot access target folder: ${error}`);
+        }
+      }
+      
+      // Analyze document parent patterns
+      console.log(`\n📊 Document Parent Folder Analysis:`);
+      const allDocsResponse = await fetch('https://www.googleapis.com/drive/v3/files?q=mimeType="application/vnd.google-apps.document"&fields=files(id,name,parents)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true', {
+        headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+      });
+      
+      if (allDocsResponse.ok) {
+        const docsData = await allDocsResponse.json();
+        const docs = docsData.files || [];
+        
+        // Count documents by parent folder
+        const parentCounts: { [key: string]: { count: number; docs: string[] } } = {};
+        
+        for (const doc of docs) {
+          const parents = doc.parents || ['root'];
+          for (const parent of parents) {
+            if (!parentCounts[parent]) {
+              parentCounts[parent] = { count: 0, docs: [] };
+            }
+            parentCounts[parent].count++;
+            parentCounts[parent].docs.push(`${doc.name} (${doc.id})`);
+          }
+        }
+        
+        console.log(`   📄 Total accessible documents: ${docs.length}`);
+        console.log(`   📁 Documents by parent folder:`);
+        
+        // Show top parent folders
+        const sortedParents = Object.entries(parentCounts)
+          .sort(([,a], [,b]) => b.count - a.count)
+          .slice(0, 10);
+          
+        for (const [parentId, info] of sortedParents) {
+          console.log(`      ${parentId}: ${info.count} documents`);
+          if (info.count <= 5) {
+            for (const docName of info.docs) {
+              console.log(`         - ${docName}`);
+            }
+          } else {
+            console.log(`         - ${info.docs.slice(0, 3).join(', ')}, and ${info.count - 3} more...`);
+          }
+        }
+        
+        // Highlight the most common non-target parent
+        const mainParent = sortedParents[0];
+        if (mainParent && mainParent[0] !== targetFolderId) {
+          console.log(`\n⚠️  ISSUE DETECTED:`);
+          console.log(`   📁 Most documents (${mainParent[1].count}) are in folder: ${mainParent[0]}`);
+          console.log(`   🎯 But target folder is configured as: ${targetFolderId}`);
+          console.log(`   💡 This suggests a workspace/authentication mismatch!`);
+        }
+      }
+      
+      // Search specifically for "The Synaptitudes"
+      console.log(`\n🔍 Searching for "The Synaptitudes" document:`);
+      const synaptitudesSearch = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent('name contains "Synaptitudes"')}&fields=files(id,name,parents,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true`, {
+        headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+      });
+      
+      if (synaptitudesSearch.ok) {
+        const searchData = await synaptitudesSearch.json();
+        const results = searchData.files || [];
+        
+        if (results.length > 0) {
+          console.log(`   ✅ Found ${results.length} matching documents:`);
+          for (const doc of results) {
+            console.log(`      📄 "${doc.name}" (${doc.id})`);
+            console.log(`         Parents: ${JSON.stringify(doc.parents || [])}`);
+            console.log(`         Link: ${doc.webViewLink || 'No link'}`);
+          }
+        } else {
+          console.log(`   ❌ No documents found matching "Synaptitudes"`);
+          console.log(`   💡 This document may be in a different workspace or account`);
+        }
+      }
+      
+      const message = `Workspace diagnosis complete! Check console for detailed results.\nUser: ${displayName} (${email})\nDomain: ${domain}`;
+      console.log(`\n🔍 ${message}`);
+      new Notice(message, 10000);
+      
+    } catch (error) {
+      console.error('Failed to diagnose workspace access:', error);
+      new Notice(`Failed to diagnose workspace access: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Switch the plugin configuration to use the folder where most documents are actually located
+   */
+  async switchToDocumentFolder(): Promise<void> {
+    try {
+      console.log('🔄 Analyzing document locations to find the correct folder...');
+      
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      // Get all accessible documents and analyze their parent folders
+      const allDocsResponse = await fetch('https://www.googleapis.com/drive/v3/files?q=mimeType="application/vnd.google-apps.document"&fields=files(id,name,parents)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true', {
+        headers: { 'Authorization': `Bearer ${driveAPI.getAccessToken()}` }
+      });
+      
+      if (!allDocsResponse.ok) {
+        throw new Error(`Failed to get documents: ${allDocsResponse.status} ${allDocsResponse.statusText}`);
+      }
+      
+      const docsData = await allDocsResponse.json();
+      const docs = docsData.files || [];
+      
+      if (docs.length === 0) {
+        new Notice('No documents found to analyze', 5000);
+        return;
+      }
+      
+      // Count documents by parent folder
+      const parentCounts: { [key: string]: number } = {};
+      
+      for (const doc of docs) {
+        const parents = doc.parents || ['root'];
+        for (const parent of parents) {
+          parentCounts[parent] = (parentCounts[parent] || 0) + 1;
+        }
+      }
+      
+      // Find the folder with the most documents
+      const sortedParents = Object.entries(parentCounts)
+        .sort(([,a], [,b]) => b - a);
+      
+      if (sortedParents.length === 0) {
+        new Notice('No parent folders found', 5000);
+        return;
+      }
+      
+      const [mostCommonParent, docCount] = sortedParents[0];
+      
+      console.log(`📊 Document distribution analysis:`);
+      for (const [parentId, count] of sortedParents.slice(0, 5)) {
+        console.log(`   ${parentId}: ${count} documents`);
+      }
+      
+      console.log(`\n🎯 Most documents (${docCount}) are in folder: ${mostCommonParent}`);
+      
+      // Get folder info if it's not 'root'
+      let folderName = 'Google Drive Root';
+      if (mostCommonParent !== 'root') {
+        try {
+          const folderInfo = await driveAPI.getFile(mostCommonParent);
+          folderName = folderInfo.name || 'Unnamed Folder';
+        } catch (error) {
+          console.warn('Could not get folder name:', error);
+        }
+      }
+      
+      const currentFolder = this.settings.driveFolderId;
+      
+      if (mostCommonParent === currentFolder) {
+        const message = `Already configured to use the correct folder: ${folderName} (${mostCommonParent})`;
+        console.log(`✅ ${message}`);
+        new Notice(message, 5000);
+        return;
+      }
+      
+      // Ask user for confirmation
+      const confirmed = confirm(
+        `Switch from current folder:\n` +
+        `"${currentFolder || 'Not set'}"\n\n` +
+        `To folder with most documents (${docCount} docs):\n` +
+        `"${folderName}" (${mostCommonParent})\n\n` +
+        `This will update your plugin settings. Continue?`
+      );
+      
+      if (!confirmed) {
+        new Notice('Operation cancelled', 3000);
+        return;
+      }
+      
+      // Update the settings
+      this.settings.driveFolderId = mostCommonParent;
+      await this.saveSettings();
+      
+      console.log(`✅ Updated Drive folder ID to: ${mostCommonParent}`);
+      console.log(`📁 Folder name: ${folderName}`);
+      console.log(`📄 This folder contains ${docCount} documents`);
+      
+      const message = `Switched to folder: ${folderName}\nThis folder contains ${docCount} documents`;
+      new Notice(message, 8000);
+      
+      // Suggest running a sync
+      setTimeout(() => {
+        new Notice('Consider running a sync to see the documents from this folder', 5000);
+      }, 2000);
+      
+    } catch (error) {
+      console.error('Failed to switch to document folder:', error);
+      new Notice(`Failed to switch folder: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

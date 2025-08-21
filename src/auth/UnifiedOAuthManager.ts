@@ -214,20 +214,76 @@ export class UnifiedOAuthManager {
    * Browser environment auth flow (Obsidian with manual code entry)
    */
   private async startBrowserAuthFlow(): Promise<Credentials> {
-    const { codeChallenge } = await this.generatePKCE();
-
-    // For browser, we'll use a manual flow
-    const redirectUri = 'urn:ietf:wg:oauth:2.0:oob'; // Out-of-band flow
-    const authUrl = this.buildAuthUrl(codeChallenge, redirectUri);
-
-    // In a real Obsidian plugin, this would show a modal with instructions
-    console.log('Please visit this URL and paste the authorization code:');
-    console.log(authUrl);
-
-    // For now, throw an error directing to CLI
     throw new Error(
-      `Please visit this URL and complete authorization:\n${authUrl}\n\nAlternatively, run "gdocs-markdown-sync auth" in your terminal.`,
+      'Browser auth flow requires interactive handling. Use getAuthorizationUrl() and exchangeCodeForTokens() instead.'
     );
+  }
+
+  /**
+   * Get authorization URL for browser-based OAuth flow
+   * Returns the URL and code verifier needed for token exchange
+   */
+  async getAuthorizationUrl(): Promise<{ url: string; codeVerifier: string }> {
+    const { codeVerifier, codeChallenge } = await this.generatePKCE();
+    const redirectUri = 'urn:ietf:wg:oauth:2.0:oob'; // Out-of-band flow for manual code entry
+    const url = this.buildAuthUrl(codeChallenge, redirectUri);
+    
+    return { url, codeVerifier };
+  }
+
+  /**
+   * Exchange authorization code for access tokens
+   * Uses the code verifier from getAuthorizationUrl()
+   */
+  async exchangeCodeForTokens(code: string, codeVerifier: string): Promise<Credentials> {
+    const operation = this.logger.startOperation('exchange-code-for-tokens');
+
+    return ErrorUtils.withErrorContext(
+      async () => {
+        const tokenResponse = await NetworkUtils.fetchWithRetry(
+          'https://oauth2.googleapis.com/token',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              client_id: this.config.clientId || this.PUBLIC_CLIENT_ID,
+              client_secret: this.config.clientSecret || this.CLIENT_SECRET,
+              code,
+              code_verifier: codeVerifier,
+              grant_type: 'authorization_code',
+              redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+            }).toString(),
+          },
+          getNetworkConfig(),
+        );
+
+        if (!tokenResponse.ok) {
+          const errorData = await tokenResponse.json().catch(() => ({}));
+          operation.failure('Token exchange failed', { statusCode: tokenResponse.status, errorData });
+          throw new AuthenticationError(
+            `Token exchange failed: ${tokenResponse.status} ${tokenResponse.statusText}`,
+            { operation: 'token-exchange', statusCode: tokenResponse.status },
+          );
+        }
+
+        const tokens = await tokenResponse.json();
+        operation.success('Tokens exchanged successfully');
+
+        // Convert to our Credentials format
+        const credentials: Credentials = {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          token_type: tokens.token_type || 'Bearer',
+          scope: this.config.scopes?.join(' ') || this.SCOPES.join(' '),
+          expiry_date: tokens.expiry_date || (Date.now() + (tokens.expires_in || 3600) * 1000),
+        };
+
+        return credentials;
+      },
+      { operation: 'exchange-code-for-tokens' },
+    )();
   }
 
   /**
