@@ -415,6 +415,33 @@ export class DriveAPI {
   }
 
   /**
+   * Update document properties (metadata)
+   */
+  async updateDocumentProperties(docId: string, properties: Record<string, string>): Promise<void> {
+    const context: ErrorContext = {
+      operation: 'update-doc-properties',
+      resourceId: docId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      await NetworkUtils.fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files/${docId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            ...this.authHeaders,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            appProperties: properties,
+          }),
+        },
+        this.defaultRequestConfig,
+      );
+    }, context)();
+  }
+
+  /**
    * Export Google Doc as plain text (closest to markdown)
    */
   async exportDocAsMarkdown(docId: string): Promise<string> {

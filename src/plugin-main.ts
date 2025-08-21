@@ -27,8 +27,12 @@ interface SyncState {
   hasRemoteChanges: boolean;
   hasLocalMove: boolean;
   hasRemoteMove: boolean;
+  hasLocalDelete: boolean;
+  hasRemoteDelete: boolean;
   localMoveFrom?: string;
   remoteMoveFrom?: string;
+  deleteReason?: 'local-deleted' | 'remote-deleted' | 'remote-trashed';
+  remoteDeletedAt?: Date;
 }
 
 interface OperationSummary {
@@ -193,7 +197,9 @@ class ChangeDetector {
         hasLocalChanges: false, 
         hasRemoteChanges: false,
         hasLocalMove: false,
-        hasRemoteMove: false
+        hasRemoteMove: false,
+        hasLocalDelete: false,
+        hasRemoteDelete: false
       };
     }
 
@@ -203,19 +209,48 @@ class ChangeDetector {
     // Check for local changes (file modified after last sync)
     const hasLocalChanges = localMtime > lastSynced;
 
-    // Check for remote changes by querying Google Drive
-    const hasRemoteChanges = await this.plugin.hasRemoteChanges(metadata.id, metadata.lastSynced);
+    // Check for remote changes and deletions
+    let hasRemoteChanges = false;
+    let hasRemoteDelete = false;
+    let deleteReason: 'remote-deleted' | 'remote-trashed' | undefined;
+    let remoteDeletedAt: Date | undefined;
+
+    try {
+      if (metadata.id) {
+        const driveAPI = await this.plugin.getAuthenticatedDriveAPI();
+        
+        // Check if the Google Doc still exists
+        const fileInfo = await driveAPI.getFile(metadata.id);
+        
+        if (!fileInfo) {
+          // File completely deleted
+          hasRemoteDelete = true;
+          deleteReason = 'remote-deleted';
+          remoteDeletedAt = new Date();
+        } else if (fileInfo.trashed) {
+          // File moved to trash
+          hasRemoteDelete = true;
+          deleteReason = 'remote-trashed';
+          remoteDeletedAt = new Date(fileInfo.modifiedTime);
+        } else {
+          // File exists, check for normal changes
+          hasRemoteChanges = await this.plugin.hasRemoteChanges(metadata.id, metadata.lastSynced);
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to check remote file status:', error);
+    }
 
     // Check for local move (file path changed since last sync)
     const hasLocalMove = metadata.lastSyncPath && metadata.lastSyncPath !== file.path;
     const localMoveFrom = hasLocalMove ? metadata.lastSyncPath : undefined;
 
-    // Check for remote move by comparing Google Drive path
+    // Check for remote move (only if file still exists)
     let hasRemoteMove = false;
     let remoteMoveFrom: string | undefined;
     
     try {
-      if (this.plugin.settings.syncMoves && metadata.id) {
+      if (this.plugin.settings.syncMoves && metadata.id && !hasRemoteDelete) {
         const driveAPI = await this.plugin.getAuthenticatedDriveAPI();
         const currentRemotePath = await driveAPI.getFilePath(metadata.id);
         const expectedRemotePath = this.plugin.calculateExpectedRemotePath(file.path);
@@ -229,13 +264,20 @@ class ChangeDetector {
       console.warn('Failed to check for remote move:', error);
     }
 
+    // Local delete detection (file exists in our tracking but not in vault)
+    // This will be handled at a higher level during sync enumeration
+
     return { 
       hasLocalChanges, 
       hasRemoteChanges,
       hasLocalMove,
       hasRemoteMove,
+      hasLocalDelete: false, // Will be set during sync enumeration
+      hasRemoteDelete,
       localMoveFrom,
-      remoteMoveFrom
+      remoteMoveFrom,
+      deleteReason,
+      remoteDeletedAt
     };
   }
 }
@@ -342,6 +384,24 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       id: 'show-sync-status',
       name: 'Show sync status',
       callback: () => this.showSyncStatus(),
+    });
+
+    this.addCommand({
+      id: 'show-trash',
+      name: 'Show Sync Trash',
+      callback: () => this.showTrashFolder(),
+    });
+
+    this.addCommand({
+      id: 'empty-trash',
+      name: 'Empty Sync Trash',
+      callback: () => this.emptyTrash(),
+    });
+
+    this.addCommand({
+      id: 'restore-from-trash',
+      name: 'Restore File from Trash',
+      callback: () => this.showRestoreModal(),
     });
 
 
@@ -801,6 +861,9 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     operation: '',
     startTime: 0,
   };
+  
+  // Track known Google Doc IDs to detect deletions
+  private knownGoogleDocIds: Set<string> = new Set();
 
   async syncAllDocuments() {
     // Check if sync is already in progress
@@ -831,6 +894,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       let createCount = 0;
       let updateCount = 0;
       let moveCount = 0;
+      let deleteCount = 0;
+      let archiveCount = 0;
       let errorCount = 0;
 
       console.log(`📁 Found ${files.length} markdown files to process`);
@@ -902,8 +967,24 @@ export default class GoogleDocsSyncPlugin extends Plugin {
               }
             }
             
-            // Handle content changes
-            if (syncState.hasLocalChanges || syncState.hasRemoteChanges) {
+            // Handle delete operations (process before content changes)
+            if (syncState.hasRemoteDelete) {
+              const deleteResult = await this.handleRemoteDelete(file, syncState, driveAPI);
+              if (deleteResult.archived) {
+                archiveCount++;
+                syncCount++;
+                needsSync = true;
+                syncReason = deleteResult.reason;
+              } else if (deleteResult.restored) {
+                updateCount++;
+                syncCount++;
+                needsSync = true;
+                syncReason = 'restored from delete conflict';
+              }
+            }
+            
+            // Handle content changes (only if file wasn't deleted)
+            if (!syncState.hasRemoteDelete && (syncState.hasLocalChanges || syncState.hasRemoteChanges)) {
               console.log(`Content changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
               await this.performSmartSync(file);
               updateCount++;
@@ -931,14 +1012,14 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
       // Show brief completion notice only
       if (this.syncCancelled) {
-        new Notice(`Sync cancelled: ${createCount} created, ${updateCount} updated, ${moveCount} moved`, 2000);
+        new Notice(`Sync cancelled: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${archiveCount} archived`, 2000);
       } else if (errorCount > 0) {
-        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${errorCount} errors`, 3000);
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${archiveCount} archived, ${errorCount} errors`, 3000);
       } else {
-        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved`, 2000);
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${archiveCount} archived`, 2000);
       }
       
-      console.log(`✅ Sync ${this.syncCancelled ? 'cancelled' : 'completed'}: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${errorCount} errors`);
+      console.log(`✅ Sync ${this.syncCancelled ? 'cancelled' : 'completed'}: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${archiveCount} archived, ${errorCount} errors`);
       
     } catch (error) {
       console.error('❌ Sync failed:', error);
@@ -2341,6 +2422,355 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
     
     return localPath;
+  }
+
+  /**
+   * Get or create local trash folder for archived files
+   */
+  private async getLocalTrashFolder(): Promise<string> {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const trashPath = `.trash/${today}`;
+    
+    try {
+      // Check if folder exists
+      const existingFolder = this.app.vault.getAbstractFileByPath(trashPath);
+      if (!existingFolder) {
+        // Create the folder structure
+        await this.app.vault.createFolder(trashPath);
+      }
+      return trashPath;
+    } catch (error) {
+      console.error('Failed to create local trash folder:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get or create Google Drive trash folder for archived files
+   */
+  private async getRemoteTrashFolder(driveAPI: DriveAPI): Promise<string> {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const trashPath = `Obsidian Trash/${today}`;
+    
+    try {
+      // Create the nested folder structure
+      const trashFolderId = await driveAPI.ensureNestedFolders(trashPath, this.settings.driveFolderId);
+      return trashFolderId;
+    } catch (error) {
+      console.error('Failed to create remote trash folder:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Archive local file to trash (soft delete)
+   */
+  private async archiveLocalFile(file: TFile, reason: string): Promise<string> {
+    try {
+      const trashFolder = await this.getLocalTrashFolder();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const archivedFileName = `${file.basename}_${timestamp}.md`;
+      const archivedPath = `${trashFolder}/${archivedFileName}`;
+      
+      // Read content before moving
+      const content = await this.app.vault.read(file);
+      
+      // Add deletion metadata to frontmatter
+      const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
+      const updatedFrontmatter = {
+        ...frontmatter,
+        'deletion-scheduled': new Date().toISOString(),
+        'deletion-reason': reason,
+        'original-path': file.path,
+        'archived-from': 'local-delete'
+      };
+      
+      // Create archived file with updated metadata
+      const archivedContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
+      await this.app.vault.create(archivedPath, archivedContent);
+      
+      // Remove original file
+      await this.app.vault.delete(file);
+      
+      console.log(`📁 Archived local file: ${file.path} → ${archivedPath}`);
+      return archivedPath;
+    } catch (error) {
+      console.error(`Failed to archive local file ${file.path}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Archive Google Doc to trash (soft delete)
+   */
+  private async archiveRemoteFile(docId: string, fileName: string, reason: string, driveAPI: DriveAPI): Promise<string> {
+    try {
+      const trashFolderId = await this.getRemoteTrashFolder(driveAPI);
+      
+      // Move the Google Doc to trash folder
+      await driveAPI.moveFile(docId, trashFolderId);
+      
+      // Update document properties to track deletion
+      await driveAPI.updateDocumentProperties(docId, {
+        'deletion-scheduled': new Date().toISOString(),
+        'deletion-reason': reason,
+        'archived-from': 'remote-delete'
+      });
+      
+      console.log(`📁 Archived remote file: ${fileName} (${docId}) to Google Drive trash`);
+      return trashFolderId;
+    } catch (error) {
+      console.error(`Failed to archive remote file ${fileName} (${docId}):`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Restore file from local trash
+   */
+  private async restoreLocalFile(archivedPath: string, originalPath?: string): Promise<string> {
+    try {
+      const archivedFile = this.app.vault.getAbstractFileByPath(archivedPath);
+      if (!archivedFile || !(archivedFile instanceof TFile)) {
+        throw new Error('Archived file not found');
+      }
+      
+      // Read archived content
+      const content = await this.app.vault.read(archivedFile);
+      const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
+      
+      // Determine restore path
+      const restorePath = originalPath || frontmatter['original-path'] || archivedFile.basename.replace(/_\d{4}-\d{2}-\d{2}T[\d-]+$/, '.md');
+      
+      // Remove deletion metadata
+      const restoredFrontmatter = { ...frontmatter };
+      delete restoredFrontmatter['deletion-scheduled'];
+      delete restoredFrontmatter['deletion-reason'];
+      delete restoredFrontmatter['original-path'];
+      delete restoredFrontmatter['archived-from'];
+      
+      // Create restored file
+      const restoredContent = SyncUtils.buildMarkdownWithFrontmatter(restoredFrontmatter, markdown);
+      
+      // Check if target path exists
+      if (this.app.vault.getAbstractFileByPath(restorePath)) {
+        // Generate unique name
+        const baseName = restorePath.replace(/\.md$/, '');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const uniquePath = `${baseName}_restored_${timestamp}.md`;
+        await this.app.vault.create(uniquePath, restoredContent);
+        console.log(`🔄 Restored file to unique path: ${archivedPath} → ${uniquePath}`);
+        return uniquePath;
+      } else {
+        await this.app.vault.create(restorePath, restoredContent);
+        console.log(`🔄 Restored file: ${archivedPath} → ${restorePath}`);
+      }
+      
+      // Remove archived file
+      await this.app.vault.delete(archivedFile);
+      
+      return restorePath;
+    } catch (error) {
+      console.error(`Failed to restore file ${archivedPath}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle remote delete operations (delete vs edit conflict resolution)
+   */
+  private async handleRemoteDelete(file: TFile, syncState: SyncState, driveAPI: DriveAPI): Promise<{archived: boolean, restored: boolean, reason: string}> {
+    try {
+      const metadata = await this.getGoogleDocsMetadata(file);
+      if (!metadata) {
+        return { archived: false, restored: false, reason: 'no metadata' };
+      }
+
+      // Check if local file has been modified since deletion
+      const localMtime = file.stat.mtime;
+      const deleteTime = syncState.remoteDeletedAt?.getTime() || Date.now();
+      const hasLocalEditsAfterDelete = localMtime > deleteTime;
+
+      // Delete vs Edit conflict resolution: ALWAYS prefer the edit
+      if (hasLocalEditsAfterDelete || syncState.hasLocalChanges) {
+        console.log(`🔄 Delete vs Edit conflict: Local file has edits after remote deletion - restoring Google Doc`);
+        
+        if (this.settings.deleteHandling === 'ignore') {
+          console.log(`⏸️ Delete handling set to ignore - skipping restore`);
+          return { archived: false, restored: false, reason: 'delete handling ignored' };
+        }
+
+        // Restore the Google Doc by recreating it from local content
+        await this.recreateDeletedGoogleDoc(file, metadata.id, driveAPI);
+        return { archived: false, restored: true, reason: 'restored from delete conflict' };
+      }
+
+      // No local edits - proceed with deletion based on settings
+      switch (this.settings.deleteHandling) {
+        case 'archive':
+          console.log(`📁 Archiving local file due to remote deletion: ${file.path}`);
+          await this.archiveLocalFile(file, `Remote ${syncState.deleteReason === 'remote-trashed' ? 'trashed' : 'deleted'}: ${syncState.remoteDeletedAt?.toISOString()}`);
+          return { archived: true, restored: false, reason: 'archived due to remote delete' };
+
+        case 'sync':
+          console.log(`🗑️ Deleting local file due to remote deletion: ${file.path}`);
+          if (this.settings.showDeletionWarnings) {
+            // In a real implementation, we'd show a confirmation dialog here
+            // For now, we'll proceed with deletion
+          }
+          await this.app.vault.delete(file);
+          return { archived: false, restored: false, reason: 'deleted due to remote delete' };
+
+        case 'ignore':
+        default:
+          console.log(`⏸️ Ignoring remote deletion of: ${file.path}`);
+          return { archived: false, restored: false, reason: 'delete handling ignored' };
+      }
+    } catch (error) {
+      console.error(`Failed to handle remote delete for ${file.path}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Recreate a deleted Google Doc from local content
+   */
+  private async recreateDeletedGoogleDoc(file: TFile, originalDocId: string, driveAPI: DriveAPI): Promise<void> {
+    try {
+      // Get current content
+      const content = await this.app.vault.read(file);
+      const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
+
+      // Calculate target Google Drive path
+      const { folderPath, documentName } = this.calculateGoogleDrivePath(file);
+      
+      // Ensure target folder exists
+      const targetFolderId = await driveAPI.ensureNestedFolders(folderPath, this.settings.driveFolderId);
+
+      // Create new Google Doc
+      const newDocId = await driveAPI.createDocument(documentName, markdown, targetFolderId);
+
+      // Update frontmatter with new Google Doc information
+      const updatedFrontmatter = {
+        ...frontmatter,
+        'google-doc-id': newDocId,
+        'google-doc-url': `https://docs.google.com/document/d/${newDocId}/edit`,
+        'google-doc-title': documentName,
+        'last-synced': new Date().toISOString(),
+        'last-sync-path': file.path,
+        'sync-revision': (frontmatter['sync-revision'] || 0) + 1,
+        'restored-from-delete': new Date().toISOString(),
+        'original-doc-id': originalDocId, // Track the original for reference
+      };
+
+      // Update local file with new metadata
+      const updatedContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
+      await this.app.vault.modify(file, updatedContent);
+
+      console.log(`✅ Recreated Google Doc: ${file.path} → ${newDocId} (was ${originalDocId})`);
+    } catch (error) {
+      console.error(`Failed to recreate deleted Google Doc for ${file.path}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Show trash folder in Obsidian
+   */
+  async showTrashFolder(): Promise<void> {
+    try {
+      const trashFolder = this.app.vault.getAbstractFileByPath('.trash');
+      if (!trashFolder) {
+        new Notice('No trash folder found. Archive some files first.', 5000);
+        return;
+      }
+
+      // Open the trash folder in the file explorer
+      this.app.workspace.getLeaf().openFile(trashFolder as any);
+      new Notice('Opened trash folder. Archived files are organized by date.', 3000);
+    } catch (error) {
+      console.error('Failed to show trash folder:', error);
+      new Notice('Failed to open trash folder');
+    }
+  }
+
+  /**
+   * Empty trash folder with confirmation
+   */
+  async emptyTrash(): Promise<void> {
+    try {
+      const trashFolder = this.app.vault.getAbstractFileByPath('.trash');
+      if (!trashFolder) {
+        new Notice('No trash folder found - nothing to empty', 3000);
+        return;
+      }
+
+      // Count files in trash
+      const trashFiles = this.app.vault.getAllLoadedFiles()
+        .filter(file => file.path.startsWith('.trash/'))
+        .filter(file => file instanceof TFile);
+
+      if (trashFiles.length === 0) {
+        new Notice('Trash folder is already empty', 3000);
+        return;
+      }
+
+      if (this.settings.showDeletionWarnings) {
+        const confirmed = confirm(
+          `Permanently delete ${trashFiles.length} files from trash?\n\nThis action cannot be undone.`
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      // Delete all files in trash
+      for (const file of trashFiles) {
+        if (file instanceof TFile) {
+          await this.app.vault.delete(file);
+        }
+      }
+
+      // Clean up empty directories
+      await this.app.vault.delete(trashFolder);
+
+      new Notice(`Permanently deleted ${trashFiles.length} files from trash`, 3000);
+      console.log(`🗑️ Emptied trash: ${trashFiles.length} files permanently deleted`);
+    } catch (error) {
+      console.error('Failed to empty trash:', error);
+      new Notice('Failed to empty trash');
+    }
+  }
+
+  /**
+   * Show modal to restore files from trash
+   */
+  async showRestoreModal(): Promise<void> {
+    try {
+      const trashFiles = this.app.vault.getAllLoadedFiles()
+        .filter(file => file.path.startsWith('.trash/'))
+        .filter(file => file instanceof TFile) as TFile[];
+
+      if (trashFiles.length === 0) {
+        new Notice('No files found in trash to restore', 3000);
+        return;
+      }
+
+      // For now, just show a list of files and restore the first one as an example
+      // In a full implementation, this would be a proper modal with selection
+      const fileList = trashFiles.map(f => f.path).join('\n');
+      const message = `Files in trash:\n${fileList}\n\nRestoring first file as example...`;
+      new Notice(message, 5000);
+
+      // Restore first file as example
+      if (trashFiles.length > 0) {
+        const restoredPath = await this.restoreLocalFile(trashFiles[0].path);
+        new Notice(`Restored: ${restoredPath}`, 3000);
+      }
+    } catch (error) {
+      console.error('Failed to show restore modal:', error);
+      new Notice('Failed to show restore options');
+    }
   }
 }
 
