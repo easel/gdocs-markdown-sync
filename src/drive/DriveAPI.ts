@@ -299,6 +299,122 @@ export class DriveAPI {
   }
 
   /**
+   * Move a file to trash (soft delete)
+   */
+  async trashFile(fileId: string): Promise<void> {
+    const context: ErrorContext = {
+      operation: 'trash-file',
+      resourceId: fileId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      await NetworkUtils.fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files/${fileId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            ...this.authHeaders,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            trashed: true,
+          }),
+        },
+        this.defaultRequestConfig,
+      );
+    }, context)();
+  }
+
+  /**
+   * Move a file from one folder to another
+   */
+  async moveFile(fileId: string, newParentId: string, currentParentId?: string): Promise<void> {
+    const context: ErrorContext = {
+      operation: 'move-file',
+      resourceId: fileId,
+      targetLocation: newParentId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      // Get current parents if not provided
+      let removeParents = currentParentId;
+      if (!removeParents) {
+        const fileInfo = await this.getFile(fileId);
+        removeParents = fileInfo.parents?.[0]; // Usually files have one parent
+      }
+
+      // Build update parameters
+      const params = new URLSearchParams();
+      params.append('addParents', newParentId);
+      if (removeParents) {
+        params.append('removeParents', removeParents);
+      }
+
+      await NetworkUtils.fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?${params.toString()}`,
+        {
+          method: 'PATCH',
+          headers: this.authHeaders,
+        },
+        this.defaultRequestConfig,
+      );
+    }, context)();
+  }
+
+  /**
+   * Get file parents (folders containing the file)
+   */
+  async getFileParents(fileId: string): Promise<string[]> {
+    const context: ErrorContext = {
+      operation: 'get-file-parents',
+      resourceId: fileId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      const response = await NetworkUtils.fetchWithRetry(
+        `https://www.googleapis.com/drive/v3/files/${fileId}?fields=parents`,
+        {
+          headers: this.authHeaders,
+        },
+        this.defaultRequestConfig,
+      );
+
+      const data = await response.json();
+      return data.parents || [];
+    }, context)();
+  }
+
+  /**
+   * Get file path in Drive (folder hierarchy)
+   */
+  async getFilePath(fileId: string): Promise<string> {
+    const context: ErrorContext = {
+      operation: 'get-file-path',
+      resourceId: fileId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      const pathParts: string[] = [];
+      
+      // Get file info
+      const fileInfo = await this.getFile(fileId);
+      pathParts.unshift(fileInfo.name);
+
+      // Traverse up the folder hierarchy
+      let currentParents = fileInfo.parents || [];
+      
+      while (currentParents.length > 0 && currentParents[0] !== 'root') {
+        const parentId = currentParents[0];
+        const parentInfo = await this.getFile(parentId);
+        pathParts.unshift(parentInfo.name);
+        currentParents = parentInfo.parents || [];
+      }
+
+      return pathParts.join('/');
+    }, context)();
+  }
+
+  /**
    * Export Google Doc as plain text (closest to markdown)
    */
   async exportDocAsMarkdown(docId: string): Promise<string> {

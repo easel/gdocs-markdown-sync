@@ -115,6 +115,63 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           }),
       );
 
+    containerEl.createEl('h3', { text: 'Move and Delete Handling' });
+
+    new Setting(containerEl)
+      .setName('Sync Moves')
+      .setDesc('Automatically sync file moves between vault and Google Drive')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.syncMoves === true)
+          .onChange(async (value) => {
+            this.plugin.settings.syncMoves = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Delete Handling')
+      .setDesc('How to handle when files are deleted on either side')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('archive', 'Archive (Safe - move to trash folders)')
+          .addOption('ignore', 'Ignore (Do nothing)')
+          .addOption('sync', 'Sync (Dangerous - delete on both sides)')
+          .setValue(this.plugin.settings.deleteHandling || 'archive')
+          .onChange(async (value: 'archive' | 'ignore' | 'sync') => {
+            this.plugin.settings.deleteHandling = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Archive Retention')
+      .setDesc('Days to keep archived files before permanent deletion (0 = keep forever)')
+      .addText((text) =>
+        text
+          .setPlaceholder('30')
+          .setValue((this.plugin.settings.archiveRetentionDays || 30).toString())
+          .onChange(async (value) => {
+            const days = parseInt(value, 10);
+            if (!isNaN(days) && days >= 0) {
+              this.plugin.settings.archiveRetentionDays = days;
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName('Show Deletion Warnings')
+      .setDesc('Show confirmation dialogs for deletion operations')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.showDeletionWarnings === true)
+          .onChange(async (value) => {
+            this.plugin.settings.showDeletionWarnings = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
     // Background sync status and controls
     const statusSetting = new Setting(containerEl)
       .setName('Background Sync Status')

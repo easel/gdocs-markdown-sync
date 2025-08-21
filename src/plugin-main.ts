@@ -10,7 +10,7 @@ import { ConflictResolver } from './sync/ConflictResolver';
 import { SyncService, createSyncService } from './sync/SyncService';
 import { SyncStatusManager } from './sync/SyncStatusManager';
 import { SyncUtils, FrontMatter } from './sync/SyncUtils';
-import { GoogleDocsSyncSettings as ImportedSettings } from './types';
+import { GoogleDocsSyncSettings as ImportedSettings, SyncFileState, MoveOperation } from './types';
 import { ErrorUtils, BaseError } from './utils/ErrorUtils';
 import { getBuildVersion, VERSION_INFO } from './version';
 
@@ -25,6 +25,10 @@ interface GoogleDocsSyncSettings extends ImportedSettings {
 interface SyncState {
   hasLocalChanges: boolean;
   hasRemoteChanges: boolean;
+  hasLocalMove: boolean;
+  hasRemoteMove: boolean;
+  localMoveFrom?: string;
+  remoteMoveFrom?: string;
 }
 
 interface OperationSummary {
@@ -185,7 +189,12 @@ class ChangeDetector {
   async detectChanges(file: TFile): Promise<SyncState> {
     const metadata = await this.plugin.getGoogleDocsMetadata(file);
     if (!metadata) {
-      return { hasLocalChanges: false, hasRemoteChanges: false };
+      return { 
+        hasLocalChanges: false, 
+        hasRemoteChanges: false,
+        hasLocalMove: false,
+        hasRemoteMove: false
+      };
     }
 
     const lastSynced = new Date(metadata.lastSynced);
@@ -197,7 +206,37 @@ class ChangeDetector {
     // Check for remote changes by querying Google Drive
     const hasRemoteChanges = await this.plugin.hasRemoteChanges(metadata.id, metadata.lastSynced);
 
-    return { hasLocalChanges, hasRemoteChanges };
+    // Check for local move (file path changed since last sync)
+    const hasLocalMove = metadata.lastSyncPath && metadata.lastSyncPath !== file.path;
+    const localMoveFrom = hasLocalMove ? metadata.lastSyncPath : undefined;
+
+    // Check for remote move by comparing Google Drive path
+    let hasRemoteMove = false;
+    let remoteMoveFrom: string | undefined;
+    
+    try {
+      if (this.plugin.settings.syncMoves && metadata.id) {
+        const driveAPI = await this.plugin.getAuthenticatedDriveAPI();
+        const currentRemotePath = await driveAPI.getFilePath(metadata.id);
+        const expectedRemotePath = this.plugin.calculateExpectedRemotePath(file.path);
+        
+        if (currentRemotePath !== expectedRemotePath) {
+          hasRemoteMove = true;
+          remoteMoveFrom = currentRemotePath;
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to check for remote move:', error);
+    }
+
+    return { 
+      hasLocalChanges, 
+      hasRemoteChanges,
+      hasLocalMove,
+      hasRemoteMove,
+      localMoveFrom,
+      remoteMoveFrom
+    };
   }
 }
 
@@ -430,6 +469,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       pollInterval: 60,
       backgroundSyncEnabled: false,
       backgroundSyncSilentMode: false,
+      // Move and delete handling defaults
+      syncMoves: true, // Enable bidirectional move sync by default
+      deleteHandling: 'archive', // Archive deletes by default (safe)
+      archiveRetentionDays: 30, // Keep archived files for 30 days
+      showDeletionWarnings: true, // Show warnings for delete operations
       // Public OAuth Client - Intentionally committed for desktop/plugin use
       // gitleaks:allow
       clientId: '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com',
@@ -536,17 +580,32 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
   updateHeaderActionIcon(action: HTMLElement, syncState: SyncState): void {
     // Remove existing classes
-    action.classList.remove('sync-none', 'sync-local', 'sync-remote', 'sync-both');
+    action.classList.remove('sync-none', 'sync-local', 'sync-remote', 'sync-both', 'sync-move');
 
-    if (syncState.hasLocalChanges && syncState.hasRemoteChanges) {
+    const hasContentChanges = syncState.hasLocalChanges || syncState.hasRemoteChanges;
+    const hasMoves = syncState.hasLocalMove || syncState.hasRemoteMove;
+    const hasBothContentChanges = syncState.hasLocalChanges && syncState.hasRemoteChanges;
+    const hasBothMoves = syncState.hasLocalMove && syncState.hasRemoteMove;
+
+    // Build status message
+    let statusParts: string[] = [];
+    if (syncState.hasLocalChanges) statusParts.push('local changes');
+    if (syncState.hasRemoteChanges) statusParts.push('remote changes');
+    if (syncState.hasLocalMove) statusParts.push('local move');
+    if (syncState.hasRemoteMove) statusParts.push('remote move');
+
+    if (hasBothContentChanges || hasBothMoves || (hasContentChanges && hasMoves)) {
       action.classList.add('sync-both');
-      action.setAttribute('aria-label', 'Conflict: Both local and remote changes');
-    } else if (syncState.hasLocalChanges) {
+      action.setAttribute('aria-label', `Conflicts: ${statusParts.join(', ')}`);
+    } else if (hasMoves && !hasContentChanges) {
+      action.classList.add('sync-move');
+      action.setAttribute('aria-label', `Move detected: ${statusParts.join(', ')}`);
+    } else if (syncState.hasLocalChanges || syncState.hasLocalMove) {
       action.classList.add('sync-local');
-      action.setAttribute('aria-label', 'Push local changes');
-    } else if (syncState.hasRemoteChanges) {
+      action.setAttribute('aria-label', `Push: ${statusParts.join(', ')}`);
+    } else if (syncState.hasRemoteChanges || syncState.hasRemoteMove) {
       action.classList.add('sync-remote');
-      action.setAttribute('aria-label', 'Pull remote changes');
+      action.setAttribute('aria-label', `Pull: ${statusParts.join(', ')}`);
     } else {
       action.classList.add('sync-none');
       action.setAttribute('aria-label', 'No changes to sync');
@@ -572,17 +631,29 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         throw new Error('Failed to find or create Google Doc');
       }
 
-      // Update frontmatter with Google Doc information if not already linked
+      // Update frontmatter with Google Doc information and enhanced tracking
       let updatedFrontmatter = frontmatter;
-      if (!frontmatter['google-doc-id'] || frontmatter['google-doc-id'] !== googleDocInfo.id) {
+      const isNewLink = !frontmatter['google-doc-id'] || frontmatter['google-doc-id'] !== googleDocInfo.id;
+      const pathChanged = frontmatter['last-sync-path'] && frontmatter['last-sync-path'] !== file.path;
+      
+      if (isNewLink || pathChanged) {
+        const currentRevision = (frontmatter['sync-revision'] || 0) + 1;
+        
         updatedFrontmatter = {
           ...frontmatter,
           'google-doc-id': googleDocInfo.id,
           'google-doc-url': `https://docs.google.com/document/d/${googleDocInfo.id}/edit`,
           'google-doc-title': googleDocInfo.name,
           'last-synced': new Date().toISOString(),
+          'last-sync-path': file.path, // Track current path for move detection
+          'sync-revision': currentRevision, // Increment sync revision
         };
-        console.log(`Linked ${file.path} to Google Doc: ${googleDocInfo.id}`);
+        
+        if (isNewLink) {
+          console.log(`Linked ${file.path} to Google Doc: ${googleDocInfo.id}`);
+        } else if (pathChanged) {
+          console.log(`File moved: ${frontmatter['last-sync-path']} → ${file.path}`);
+        }
       }
 
       // Get remote content
@@ -759,6 +830,7 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       let syncCount = 0;
       let createCount = 0;
       let updateCount = 0;
+      let moveCount = 0;
       let errorCount = 0;
 
       console.log(`📁 Found ${files.length} markdown files to process`);
@@ -793,16 +865,57 @@ export default class GoogleDocsSyncPlugin extends Plugin {
             createCount++;
             syncCount++;
           } else {
-            // File linked to Google Drive - check for changes
+            // File linked to Google Drive - check for changes and moves
             const syncState = await this.changeDetector.detectChanges(file);
             
+            let needsSync = false;
+            let syncReason = '';
+            
+            // Handle moves first (if enabled)
+            if (this.settings.syncMoves) {
+              if (syncState.hasLocalMove && syncState.hasRemoteMove) {
+                // Move conflict - need to resolve
+                console.log(`Move conflict detected for ${file.path}: local moved from ${syncState.localMoveFrom}, remote moved from ${syncState.remoteMoveFrom}`);
+                const resolvedMove = await this.resolveMoveConflict(file, syncState, driveAPI);
+                if (resolvedMove) {
+                  moveCount++;
+                  syncCount++;
+                  needsSync = true;
+                  syncReason = 'move conflict resolved';
+                }
+              } else if (syncState.hasLocalMove) {
+                // Local file moved - move Google Doc to match
+                console.log(`Local move detected: ${syncState.localMoveFrom} → ${file.path}`);
+                await this.syncLocalMoveToRemote(file, metadata.id, driveAPI);
+                moveCount++;
+                syncCount++;
+                needsSync = true;
+                syncReason = 'local move synced';
+              } else if (syncState.hasRemoteMove) {
+                // Remote file moved - move local file to match (requires careful handling)
+                console.log(`Remote move detected: ${syncState.remoteMoveFrom} → current remote location`);
+                await this.syncRemoteMoveToLocal(file, syncState.remoteMoveFrom, driveAPI);
+                moveCount++;
+                syncCount++;
+                needsSync = true;
+                syncReason = 'remote move synced';
+              }
+            }
+            
+            // Handle content changes
             if (syncState.hasLocalChanges || syncState.hasRemoteChanges) {
-              console.log(`Syncing changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
+              console.log(`Content changes for ${file.path} (local: ${syncState.hasLocalChanges}, remote: ${syncState.hasRemoteChanges})`);
               await this.performSmartSync(file);
               updateCount++;
               syncCount++;
-            } else {
+              needsSync = true;
+              syncReason += (syncReason ? ' + content changes' : 'content changes');
+            }
+            
+            if (!needsSync) {
               console.log(`No changes detected for ${file.path}`);
+            } else {
+              console.log(`Synced ${file.path}: ${syncReason}`);
             }
           }
         } catch (error) {
@@ -818,14 +931,14 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
       // Show brief completion notice only
       if (this.syncCancelled) {
-        new Notice(`Sync cancelled: ${createCount} created, ${updateCount} updated`, 2000);
+        new Notice(`Sync cancelled: ${createCount} created, ${updateCount} updated, ${moveCount} moved`, 2000);
       } else if (errorCount > 0) {
-        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${errorCount} errors`, 3000);
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${errorCount} errors`, 3000);
       } else {
-        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated`, 2000);
+        new Notice(`Sync completed: ${createCount} created, ${updateCount} updated, ${moveCount} moved`, 2000);
       }
       
-      console.log(`✅ Sync ${this.syncCancelled ? 'cancelled' : 'completed'}: ${createCount} created, ${updateCount} updated, ${errorCount} errors`);
+      console.log(`✅ Sync ${this.syncCancelled ? 'cancelled' : 'completed'}: ${createCount} created, ${updateCount} updated, ${moveCount} moved, ${errorCount} errors`);
       
     } catch (error) {
       console.error('❌ Sync failed:', error);
@@ -1158,6 +1271,9 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         url: frontmatter['google-doc-url'] || '',
         title: frontmatter['google-doc-title'] || SyncUtils.sanitizeFileName(file.basename),
         lastSynced: frontmatter['last-synced'] || new Date().toISOString(),
+        lastSyncPath: frontmatter['last-sync-path'],
+        syncRevision: frontmatter['sync-revision'] || 0,
+        deletionScheduled: frontmatter['deletion-scheduled'],
       };
     }
 
@@ -2039,6 +2155,44 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   /**
+   * Calculate expected remote path for a local file (for move detection)
+   */
+  calculateExpectedRemotePath(localPath: string): string {
+    const { folderPath, documentName } = this.calculateGoogleDrivePathFromPath(localPath);
+    return folderPath ? `${folderPath}/${documentName}` : documentName;
+  }
+
+  /**
+   * Calculate the target Google Drive path for a local file path
+   * Maps vault file structure to Google Drive folder structure
+   */
+  private calculateGoogleDrivePathFromPath(localPath: string): { folderPath: string; documentName: string } {
+    // Remove baseVaultFolder from the path if it exists
+    if (this.settings.baseVaultFolder) {
+      const baseFolder = this.settings.baseVaultFolder.replace(/\/$/, ''); // Remove trailing slash
+      if (localPath.startsWith(baseFolder + '/')) {
+        localPath = localPath.substring(baseFolder.length + 1);
+      }
+    }
+
+    // Split into folder path and filename
+    const pathParts = localPath.split('/');
+    const fileName = pathParts.pop() || '';
+    const folderPath = pathParts.join('/');
+
+    // Convert filename to document name (remove .md extension)
+    let documentName = fileName.replace(/\.md$/, '');
+    
+    // Convert underscores to spaces for Google Docs naming convention
+    documentName = documentName.replace(/_/g, ' ');
+
+    return {
+      folderPath: folderPath || '', // Empty string means root of Drive folder
+      documentName,
+    };
+  }
+
+  /**
    * Calculate the target Google Drive path for a local file
    * Maps vault file structure to Google Drive folder structure
    */
@@ -2081,6 +2235,112 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       console.warn(`Failed to get revision for doc ${docId}:`, error);
       return '';
     }
+  }
+
+  /**
+   * Sync local file move to Google Drive
+   */
+  private async syncLocalMoveToRemote(file: TFile, docId: string, driveAPI: DriveAPI): Promise<void> {
+    try {
+      // Calculate target folder in Google Drive based on new local path
+      const targetPath = this.calculateGoogleDrivePath(file);
+      
+      // Ensure target folder exists
+      const targetFolderId = await driveAPI.ensureNestedFolders(
+        targetPath.folderPath, 
+        this.settings.driveFolderId
+      );
+      
+      // Move the Google Doc to the new folder
+      await driveAPI.moveFile(docId, targetFolderId);
+      
+      console.log(`✅ Moved Google Doc ${docId} to match local file location: ${file.path}`);
+    } catch (error) {
+      console.error(`Failed to sync local move to remote for ${file.path}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync remote file move to local (create new local file at new location)
+   */
+  private async syncRemoteMoveToLocal(file: TFile, oldRemotePath: string, driveAPI: DriveAPI): Promise<void> {
+    try {
+      // Get current remote path
+      const docId = (await this.getGoogleDocsMetadata(file))?.id;
+      if (!docId) {
+        throw new Error('No Google Doc ID found for file');
+      }
+      
+      const currentRemotePath = await driveAPI.getFilePath(docId);
+      
+      // Calculate what the new local path should be
+      const newLocalPath = this.calculateLocalPathFromRemote(currentRemotePath);
+      
+      if (newLocalPath !== file.path) {
+        // Need to move/rename the local file
+        const newTFile = await this.app.vault.rename(file, newLocalPath);
+        console.log(`✅ Moved local file ${file.path} → ${newLocalPath} to match remote location`);
+      }
+    } catch (error) {
+      console.error(`Failed to sync remote move to local for ${file.path}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve move conflicts (both sides moved)
+   */
+  private async resolveMoveConflict(file: TFile, syncState: SyncState, driveAPI: DriveAPI): Promise<boolean> {
+    try {
+      // Use last-write-wins approach for move conflicts
+      // Check which side was modified more recently
+      const localMtime = file.stat.mtime;
+      const docId = (await this.getGoogleDocsMetadata(file))?.id;
+      if (!docId) {
+        throw new Error('No Google Doc ID found for file');
+      }
+      
+      const fileInfo = await driveAPI.getFile(docId);
+      const remoteMtime = new Date(fileInfo.modifiedTime).getTime();
+      
+      if (localMtime > remoteMtime) {
+        // Local is newer - sync local move to remote
+        await this.syncLocalMoveToRemote(file, docId, driveAPI);
+        console.log(`✅ Move conflict resolved: Used local location for ${file.path}`);
+      } else {
+        // Remote is newer - sync remote move to local
+        await this.syncRemoteMoveToLocal(file, syncState.remoteMoveFrom!, driveAPI);
+        console.log(`✅ Move conflict resolved: Used remote location for ${file.path}`);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`Failed to resolve move conflict for ${file.path}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Calculate local path from Google Drive path
+   */
+  private calculateLocalPathFromRemote(remotePath: string): string {
+    // Add base vault folder if configured
+    let localPath = remotePath;
+    
+    if (this.settings.baseVaultFolder) {
+      localPath = `${this.settings.baseVaultFolder}/${remotePath}`;
+    }
+    
+    // Convert spaces back to underscores if needed
+    localPath = localPath.replace(/ /g, '_');
+    
+    // Ensure .md extension
+    if (!localPath.endsWith('.md')) {
+      localPath += '.md';
+    }
+    
+    return localPath;
   }
 }
 

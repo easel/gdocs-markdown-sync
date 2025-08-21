@@ -72,6 +72,10 @@
   color: var(--text-warning); /* Orange for remote changes */
 }
 
+.sync-move {
+  color: var(--color-purple); /* Purple for move operations */
+}
+
 .sync-both {
   color: var(--text-error); /* Red for conflicts */
 }
