@@ -108,28 +108,14 @@ async function updateManifestVersion(versionInfo: VersionInfo): Promise<void> {
     const manifestContent = fs.readFileSync(manifestPath, 'utf8');
     const manifest = JSON.parse(manifestContent);
 
-    // For Obsidian manifest, use simpler version format that Obsidian can handle
-    // Complex semver pre-release versions might cause Obsidian to fall back to 1.0.0
-    let manifestVersion: string;
-    if (versionInfo.isDirty) {
-      // Simple incremental version for dev builds: 1.0.2, 1.0.3, etc.
-      const baseVersionParts = versionInfo.version.split('.');
-      const patchVersion = parseInt(baseVersionParts[2] || '0', 10);
-      manifestVersion = `${baseVersionParts[0]}.${baseVersionParts[1]}.${patchVersion + 1}`;
-    } else {
-      // Clean build: just use base version
-      manifestVersion = versionInfo.version;
-    }
-
-    if (manifest.version !== manifestVersion) {
-      manifest.version = manifestVersion;
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
-      console.log(`Updated manifest.json version to: ${manifestVersion}`);
-    } else {
-      console.log(`Manifest version already correct: ${manifestVersion}`);
-    }
+    // Keep manifest.json version static to avoid git conflicts
+    // Only update it during releases, not on every build
+    // The runtime version display uses version.ts which is gitignored
+    const currentManifestVersion = manifest.version;
+    console.log(`Manifest version (static): ${currentManifestVersion}`);
+    console.log(`Runtime version (dynamic): ${versionInfo.fullVersion}`);
   } catch (error) {
-    console.warn('Could not update manifest.json version:', error);
+    console.warn('Could not read manifest.json version:', error);
   }
 }
 

@@ -115,6 +115,47 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // Background sync status and controls
+    const statusSetting = new Setting(containerEl)
+      .setName('Background Sync Status')
+      .setDesc('View current sync status and manage background operations');
+
+    // Add status display
+    const statusEl = statusSetting.descEl.createDiv({ cls: 'sync-status-display' });
+    this.updateSyncStatusDisplay(statusEl);
+
+    // Add control buttons
+    statusSetting
+      .addButton((button) =>
+        button
+          .setButtonText('View Status')
+          .setTooltip('Show detailed background sync status')
+          .onClick(() => {
+            this.plugin.showSyncStatus();
+          }),
+      )
+      .addButton((button) =>
+        button
+          .setButtonText('Sync Now')
+          .setTooltip('Sync all documents (bidirectional)')
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.syncAllDocuments();
+            // Update display after a moment
+            setTimeout(() => this.updateSyncStatusDisplay(statusEl), 1000);
+          }),
+      )
+      .addButton((button) => {
+        const isEnabled = this.plugin.settings.backgroundSyncEnabled === true;
+        return button
+          .setButtonText(isEnabled ? 'Disable' : 'Enable')
+          .setTooltip(`${isEnabled ? 'Disable' : 'Enable'} background sync`)
+          .onClick(async () => {
+            await this.plugin.toggleBackgroundSync();
+            this.display(); // Refresh the entire settings display
+          });
+      });
+
     containerEl.createEl('h3', { text: 'Move and Delete Handling' });
 
     new Setting(containerEl)
@@ -171,48 +212,6 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
-
-    // Background sync status and controls
-    const statusSetting = new Setting(containerEl)
-      .setName('Background Sync Status')
-      .setDesc('View current sync status and manage background operations');
-
-    // Add status display
-    const statusEl = statusSetting.descEl.createDiv({ cls: 'sync-status-display' });
-    this.updateSyncStatusDisplay(statusEl);
-
-    // Add control buttons
-    statusSetting
-      .addButton((button) =>
-        button
-          .setButtonText('View Status')
-          .setTooltip('Show detailed background sync status')
-          .onClick(() => {
-            this.plugin.showSyncStatus();
-          }),
-      )
-      .addButton((button) =>
-        button
-          .setButtonText('Sync Now')
-          .setTooltip('Sync all documents (bidirectional)')
-          .setCta()
-          .onClick(async () => {
-            await this.plugin.syncAllDocuments();
-            // Update display after a moment
-            setTimeout(() => this.updateSyncStatusDisplay(statusEl), 1000);
-          }),
-      )
-      .addButton((button) => {
-        const isEnabled = this.plugin.settings.backgroundSyncEnabled === true;
-        return button
-          .setButtonText(isEnabled ? 'Disable' : 'Enable')
-          .setTooltip(`${isEnabled ? 'Disable' : 'Enable'} background sync`)
-          .onClick(async () => {
-            await this.plugin.toggleBackgroundSync();
-            this.display(); // Refresh the entire settings display
-          });
-      });
-
 
     // Advanced OAuth Configuration Section (at bottom, collapsed by default)
     const advancedHeader = containerEl.createEl('h3', { text: '▶ Advanced OAuth Configuration' });
