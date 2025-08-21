@@ -15,8 +15,34 @@ export interface AuthStatusResult {
  */
 export class PluginAuthManager {
   isAuthenticated(): boolean {
-    // TODO: Implement proper authentication check
-    return false;
+    try {
+      // Check if we have stored credentials
+      return this.currentCredentials !== null || this.hasStoredTokens();
+    } catch {
+      return false;
+    }
+  }
+
+  private hasStoredTokens(): boolean {
+    try {
+      // Check CLI tokens first
+      const cliTokens = this.tokenLoader.getTokens();
+      if (cliTokens?.access_token) {
+        return true;
+      }
+
+      // Check plugin storage tokens
+      if (this.pluginTokenStorage) {
+        const pluginTokens = this.pluginTokenStorage.getTokens();
+        if (pluginTokens?.access_token) {
+          return true;
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
   }
   private tokenLoader: BrowserTokenLoader;
   private pluginTokenStorage: ObsidianTokenStorage | null = null;
@@ -54,10 +80,8 @@ export class PluginAuthManager {
    * Gets valid credentials with enhanced error handling
    */
   async getValidCredentials(): Promise<Credentials> {
-    // Try to load credentials if we don't have them
-    if (!this.currentCredentials) {
-      this.currentCredentials = await this.loadCredentials();
-    }
+    // Always try to load credentials fresh from storage to handle plugin updates
+    this.currentCredentials = await this.loadCredentials();
 
     // If we still don't have credentials, provide detailed guidance
     if (!this.currentCredentials) {
@@ -69,13 +93,14 @@ export class PluginAuthManager {
 
     // Check if credentials are expired and attempt refresh
     if (this.tokenLoader.isTokenExpired(this.currentCredentials)) {
-      console.log('Access token expired, attempting refresh...');
       try {
         // Attempt to refresh the token
         this.currentCredentials = await this.refreshExpiredToken(this.currentCredentials);
-        console.log('Successfully refreshed expired token');
+        console.log('Token refreshed successfully');
       } catch (refreshError) {
         console.error('Token refresh failed:', refreshError);
+        // Clear invalid credentials and re-throw with user-friendly message
+        this.currentCredentials = null;
         throw new Error(
           'Authentication expired and token refresh failed. Please re-authenticate in plugin settings.',
         );
@@ -95,7 +120,6 @@ export class PluginAuthManager {
       try {
         const pluginCredentials = await this.pluginTokenStorage.load();
         if (pluginCredentials) {
-          console.log('Using plugin-stored credentials');
           return pluginCredentials;
         }
       } catch (error) {
@@ -103,7 +127,6 @@ export class PluginAuthManager {
       }
     }
 
-    console.log('No plugin credentials found - use "Start Authentication" in settings');
     return null;
   }
 
@@ -214,7 +237,6 @@ export class PluginAuthManager {
 
     await this.pluginTokenStorage.save(credentials);
     this.currentCredentials = credentials;
-    console.log('Credentials stored successfully in plugin');
   }
 
   /**
@@ -226,7 +248,6 @@ export class PluginAuthManager {
     if (this.pluginTokenStorage) {
       try {
         await this.pluginTokenStorage.clear();
-        console.log('Plugin credentials cleared');
       } catch (error) {
         console.warn('Failed to clear plugin credentials:', error);
       }

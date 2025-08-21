@@ -249,15 +249,24 @@ class ChangeDetector {
     let hasRemoteMove = false;
     let remoteMoveFrom: string | undefined;
     
+    // TODO: Temporarily disable remote move detection due to false positives
+    // The issue is comparing actual Google Doc names with calculated expected names
+    // which don't always match (especially for files with spaces/special chars)
     try {
-      if (this.plugin.settings.syncMoves && metadata.id && !hasRemoteDelete) {
+      if (false && this.plugin.settings.syncMoves && metadata.id && !hasRemoteDelete) {
         const driveAPI = await this.plugin.getAuthenticatedDriveAPI();
-        const currentRemotePath = await driveAPI.getFilePath(metadata.id);
+        
+        // Get relative path from the base drive folder
+        const baseFolderId = await this.plugin.resolveDriveFolderId();
+        const currentRemotePath = await driveAPI.getFilePath(metadata.id, baseFolderId);
         const expectedRemotePath = this.plugin.calculateExpectedRemotePath(file.path);
+        
+        console.log(`Move detection for ${file.path}: current="${currentRemotePath}", expected="${expectedRemotePath}"`);
         
         if (currentRemotePath !== expectedRemotePath) {
           hasRemoteMove = true;
           remoteMoveFrom = currentRemotePath;
+          console.log(`Move detected: "${currentRemotePath}" → "${expectedRemotePath}"`);
         }
       }
     } catch (error) {
@@ -293,6 +302,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   private updateTimeout: number | null = null;
   private currentOperations: Map<string, EnhancedNotice> = new Map();
   private authManager!: PluginAuthManager;
+  private driveAPICache: { api: DriveAPI; timestamp: number } | null = null;
+  private readonly DRIVE_API_CACHE_TTL = 60000; // 1 minute cache
   async onload() {
     console.log(`🚀 Loading Google Docs Sync plugin ${PLUGIN_VERSION}`);
     console.log(`📊 Plugin Details: version=${PLUGIN_VERSION_DETAILS.version}, commit=${PLUGIN_VERSION_DETAILS.commit}, dirty=${PLUGIN_VERSION_DETAILS.isDirty}, buildTime=${PLUGIN_VERSION_DETAILS.buildTime}`);
@@ -676,6 +687,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // No notice for individual file sync - status bar shows progress
 
     try {
+      // Validate settings before proceeding
+      if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
+        throw new Error('Google Drive folder not configured. Please set the Drive folder ID in plugin settings.');
+      }
+
       // Get current file content and metadata
       const content = await this.app.vault.read(file);
       const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
@@ -873,6 +889,16 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     }
 
     console.log('🔄 Starting syncAllDocuments()');
+    console.log(`📦 Plugin version: ${PLUGIN_VERSION} (${VERSION_INFO.commit || 'unknown'})`);
+    
+    // Validate folder configuration before proceeding
+    try {
+      await this.resolveDriveFolderId();
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : 'Invalid Google Drive folder configuration', 8000);
+      this.syncInProgress = false;
+      return;
+    }
     this.syncCancelled = false;
     this.syncInProgress = true;
     this.currentSyncStatus = {
@@ -887,6 +913,50 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       console.log('🔐 Testing authentication...');
       const driveAPI = await this.getAuthenticatedDriveAPI();
       console.log('✅ Authentication successful');
+      
+      // Build and log comprehensive sync plan
+      console.log('📋 Building sync plan for comprehensive analysis...');
+      this.currentSyncStatus.operation = 'Building sync plan...';
+      const syncPlan = await this.buildSyncPlan();
+      this.logSyncPlan(syncPlan);
+      
+      // Safety check before proceeding - only block on real conflicts
+      if (!syncPlan.operations.safe) {
+        const duplicateDocs = syncPlan.operations.warnings.filter(w => w.type === 'duplicate-document').length;
+        const conflicts = syncPlan.operations.conflicts.length;
+        
+        console.error('🛑 SYNC ABORTED - Real conflicts detected:');
+        if (duplicateDocs > 0) console.error(`   - ${duplicateDocs} duplicate document conflict(s) in Google Drive`);
+        if (conflicts > 0) console.error(`   - ${conflicts} sync conflict(s) detected`);
+        
+        const errorMessage = `Sync aborted due to conflicts: ${duplicateDocs} duplicate document conflicts, ${conflicts} sync conflicts. Please resolve conflicts manually.`;
+        new Notice(errorMessage, 15000);
+        
+        // Reset sync state and abort
+        this.syncInProgress = false;
+        this.currentSyncStatus = {
+          isRunning: false,
+          progress: { current: 0, total: 0 },
+          operation: 'Sync aborted - conflicts detected',
+          startTime: 0,
+        };
+        this.statusBarItem.setText('Sync aborted');
+        
+        console.log('\n🔧 RECOMMENDED ACTIONS TO FIX:');
+        if (duplicateDocs > 0) {
+          console.log('1. Resolve duplicate Google Doc IDs or path conflicts');
+          console.log('2. Ensure no two documents sync to the same local path');
+        }
+        if (conflicts > 0) {
+          console.log('1. Resolve local vs remote conflicts manually');
+          console.log('2. Choose which version to keep for each conflicted file');
+        }
+        console.log('3. Re-run sync after resolving conflicts');
+        
+        return; // Abort the sync operation
+      } else {
+        console.log('✅ Sync plan safety check passed - proceeding with sync');
+      }
       
       const files = this.app.vault.getMarkdownFiles();
       
@@ -1298,6 +1368,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   async pushAllDocs() {
+    // Validate settings before proceeding
+    if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
+      new Notice('Google Drive folder not configured. Please set the Drive folder ID in plugin settings.', 8000);
+      return;
+    }
+
     const files = this.app.vault.getMarkdownFiles();
     const notice = new Notice('Pushing all documents...', 0);
 
@@ -1319,27 +1395,272 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   async pullAllDocs() {
-    const files = this.app.vault.getMarkdownFiles();
-    const notice = new Notice('Pulling all documents...', 0);
+    console.log('🔄 pullAllDocs() called');
+    console.log('📋 Current settings:', {
+      driveFolderId: this.settings.driveFolderId,
+      baseVaultFolder: this.settings.baseVaultFolder,
+      profile: this.settings.profile,
+    });
 
-    let successCount = 0;
-    let errorCount = 0;
+    const notice = new Notice('Validating Google Drive folder...', 0);
 
-    for (const file of files) {
-      try {
-        const metadata = await this.getGoogleDocsMetadata(file);
-        if (metadata) {
-          await this.pullSingleFile(file);
-          successCount++;
-        }
-      } catch (error) {
-        errorCount++;
-        console.error(`Failed to pull ${file.path}:`, error);
+    try {
+      // Resolve and validate the folder ID
+      const resolvedFolderId = await this.resolveDriveFolderId();
+      console.log('✅ pullAllDocs() validation passed, resolved folderId:', resolvedFolderId);
+
+      notice.setMessage('Building comprehensive sync plan...');
+
+      // Get authenticated Drive API
+      const driveAPI = await this.getAuthenticatedDriveAPI();
+      
+      // Build and log comprehensive sync plan before pulling
+      console.log('📋 Building sync plan for pull operation analysis...');
+      const syncPlan = await this.buildSyncPlan();
+      this.logSyncPlan(syncPlan);
+      
+      // Show specific analysis for pull operation
+      const pullOperations = syncPlan.operations.pullFromRemote;
+      console.log(`\n📥 PULL ANALYSIS: ${pullOperations.length} documents can be pulled from remote`);
+      pullOperations.forEach(op => {
+        console.log(`   • ${op.action.toUpperCase()}: ${op.remoteDoc.name} → ${op.targetPath}`);
+        console.log(`     Reason: ${op.reason}`);
+      });
+      
+      // Safety checks for pull operation
+      const existingFileWarnings = syncPlan.operations.warnings.filter(w => w.type === 'existing-file');
+      const duplicateDocWarnings = syncPlan.operations.warnings.filter(w => w.type === 'duplicate-document');
+      
+      if (existingFileWarnings.length > 0) {
+        console.log(`\n⚠️  PULL CONFLICTS: ${existingFileWarnings.length} remote documents would conflict with existing local files:`);
+        existingFileWarnings.forEach(warning => {
+          console.log(`   • Remote "${warning.details.remoteName}" → Local "${warning.details.localPath}"`);
+        });
       }
-    }
+      
+      // Check for real conflicts that should abort pull
+      if (duplicateDocWarnings.length > 0) {
+        console.error('🛑 PULL ABORTED - Document conflicts detected:');
+        duplicateDocWarnings.forEach(warning => {
+          console.error(`   - Document conflict: "${warning.details.name}" appears ${warning.details.count} times`);
+          console.error(`     • IDs: ${warning.details.ids.join(', ')}`);
+        });
+        
+        const errorMessage = `Pull aborted: ${duplicateDocWarnings.length} document conflicts detected. Resolve conflicts first.`;
+        notice.setMessage('❌ ' + errorMessage);
+        setTimeout(() => notice.hide(), 15000);
+        new Notice(errorMessage, 15000);
+        
+        console.log('\n🔧 RECOMMENDED ACTIONS:');
+        console.log('1. Resolve duplicate Google Doc IDs or path conflicts');
+        console.log('2. Ensure no two documents would sync to the same local path');
+        console.log('3. Re-run "Pull All Documents" after resolving conflicts');
+        
+        return; // Abort the pull operation
+      } else if (existingFileWarnings.length > 0) {
+        console.warn(`⚠️ ${existingFileWarnings.length} potential file conflicts detected, but proceeding with pull...`);
+        const warningMessage = `${existingFileWarnings.length} remote documents may conflict with existing local files. Check console for details.`;
+        new Notice(warningMessage, 8000);
+      } else {
+        console.log('✅ Pull safety check passed - proceeding with pull operation');
+      }
 
-    notice.setMessage(`Pull completed: ${successCount} success, ${errorCount} errors`);
-    setTimeout(() => notice.hide(), 3000);
+      notice.setMessage('Discovering documents on Google Drive...');
+
+      // Get all documents from Google Drive using resolved folder ID
+      console.log('📡 Calling driveAPI.listDocsInFolder with resolved folderId:', resolvedFolderId);
+      const remoteDocs = await driveAPI.listDocsInFolder(resolvedFolderId);
+      console.log('📊 listDocsInFolder returned:', remoteDocs.length, 'documents');
+      
+      // Log the first few documents for debugging
+      if (remoteDocs.length > 0) {
+        console.log('📋 First few discovered documents:');
+        remoteDocs.slice(0, 3).forEach((doc, i) => {
+          console.log(`  ${i + 1}. "${doc.name}" (${doc.id}) at path: "${doc.relativePath || '(root)'}"`);
+        });
+        if (remoteDocs.length > 3) {
+          console.log(`  ... and ${remoteDocs.length - 3} more documents`);
+        }
+      } else {
+        console.log('⚠️ No documents found in Google Drive folder');
+      }
+      
+      notice.setMessage(`Found ${remoteDocs.length} document(s) on Google Drive. Pulling...`);
+
+      let successCount = 0;
+      let createdCount = 0;
+      let updatedCount = 0;
+      let errorCount = 0;
+
+      for (const doc of remoteDocs) {
+        try {
+          console.log(`Processing Google Doc: "${doc.name}" (${doc.id}) at path: "${doc.relativePath || '(root)'}"`);
+          
+          // Find corresponding local file by Google Doc ID
+          const localFiles = this.app.vault.getMarkdownFiles();
+          let localFile: TFile | null = null;
+          
+          for (const file of localFiles) {
+            const content = await this.app.vault.read(file);
+            const { frontmatter } = SyncUtils.parseFrontMatter(content);
+            if (frontmatter['google-doc-id'] === doc.id) {
+              localFile = file;
+              break;
+            }
+          }
+
+          if (localFile) {
+            // Update existing local file
+            console.log(`Updating existing local file: ${localFile.path}`);
+            await this.pullSingleFile(localFile);
+            updatedCount++;
+          } else {
+            // Create new local file for this Google Doc
+            console.log(`Creating new local file for Google Doc: "${doc.name}" with relativePath: "${doc.relativePath || '(empty)'}"`);
+            await this.createLocalFileFromGoogleDoc(doc, driveAPI);
+            createdCount++;
+          }
+          
+          successCount++;
+        } catch (error) {
+          errorCount++;
+          console.error(`Failed to pull ${doc.name} (${doc.id}):`, error);
+        }
+      }
+
+      notice.setMessage(`Pull completed: ${successCount} success (${createdCount} created, ${updatedCount} updated), ${errorCount} errors`);
+      setTimeout(() => notice.hide(), 5000);
+    } catch (error) {
+      console.error('Failed to pull all docs:', error);
+      
+      // Clear any cached data on errors
+      this.clearDriveAPICache();
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Pull failed: ';
+      if (error instanceof Error) {
+        if (error.message.includes('Cannot access Google Drive folder')) {
+          errorMessage += 'Invalid Google Drive folder. Please check your folder ID in settings.';
+        } else if (error.message.includes('Authentication')) {
+          errorMessage += 'Authentication failed. Please re-authenticate in settings.';
+        } else {
+          errorMessage += error.message;
+        }
+      } else {
+        errorMessage += String(error);
+      }
+      
+      notice.setMessage(errorMessage);
+      setTimeout(() => notice.hide(), 8000);
+    }
+  }
+
+  /**
+   * Create a new local file from a Google Doc
+   */
+  async createLocalFileFromGoogleDoc(doc: any, driveAPI: any): Promise<void> {
+    try {
+      console.log(`🆕 createLocalFileFromGoogleDoc for "${doc.name}" (${doc.id})`);
+      console.log(`  - doc.relativePath: "${doc.relativePath || '(empty)'}"`);
+      console.log(`  - settings.baseVaultFolder: "${this.settings.baseVaultFolder || '(not set)'}"`);
+      
+      // Download the Google Doc content
+      const remoteContent = await driveAPI.exportDocMarkdown(doc.id);
+      console.log(`  - Downloaded content length: ${remoteContent.length} chars`);
+      
+      // Create frontmatter for the new file
+      const frontmatter = {
+        'google-doc-id': doc.id,
+        'google-doc-url': `https://docs.google.com/document/d/${doc.id}/edit`,
+        'google-doc-title': doc.name,
+        'last-synced': new Date().toISOString(),
+        'sync-revision': 1,
+      };
+      
+      // Build the complete markdown content with frontmatter
+      const completeContent = SyncUtils.buildMarkdownWithFrontmatter(frontmatter, remoteContent);
+      
+      // Generate a suitable filename (sanitize the doc name)
+      const sanitizedName = SyncUtils.sanitizeFileName(doc.name);
+      const fileName = `${sanitizedName}.md`;
+      
+      console.log(`  - Sanitized filename: "${fileName}"`);
+      console.log(`  - Starting path calculation...`);
+      
+      // Determine the target path including Google Drive folder structure
+      let targetPath = fileName;
+      console.log(`  - Initial targetPath: "${targetPath}"`);
+      
+      // Start with base vault folder if configured
+      if (this.settings.baseVaultFolder && this.settings.baseVaultFolder.trim() !== '') {
+        targetPath = `${this.settings.baseVaultFolder.trim()}/${fileName}`;
+        console.log(`  - Applied base vault folder: "${targetPath}"`);
+      }
+      
+      // Add the relative path from Google Drive folder structure
+      if (doc.relativePath && doc.relativePath.trim() !== '') {
+        // If we have a base folder, combine them, otherwise use just the relative path
+        if (this.settings.baseVaultFolder && this.settings.baseVaultFolder.trim() !== '') {
+          targetPath = `${this.settings.baseVaultFolder.trim()}/${doc.relativePath}/${fileName}`;
+          console.log(`  - Combined base + relative: "${targetPath}"`);
+        } else {
+          targetPath = `${doc.relativePath}/${fileName}`;
+          console.log(`  - Applied relative path only: "${targetPath}"`);
+        }
+      } else {
+        console.log(`  - No relative path (root file), final path: "${targetPath}"`);
+      }
+      
+      console.log(`  - Final target path: "${targetPath}"`);
+      
+      // Ensure target directory exists
+      const targetDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+      if (targetDir && targetDir !== targetPath) {
+        console.log(`Creating directory: ${targetDir}`);
+        // Create nested folders if they don't exist
+        await this.ensureDirectoryExists(targetDir);
+      }
+      
+      // Create the file in the vault
+      const newFile = await this.app.vault.create(targetPath, completeContent);
+      
+      console.log(`✓ Created local file ${newFile.path} from Google Doc "${doc.name}" (${doc.id})`);
+      
+    } catch (error) {
+      console.error(`Failed to create local file from Google Doc "${doc.name}" (${doc.id}):`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ensure directory exists in Obsidian vault, creating nested folders as needed
+   */
+  async ensureDirectoryExists(dirPath: string): Promise<void> {
+    try {
+      // Check if directory already exists
+      const folderExists = this.app.vault.getAbstractFileByPath(dirPath);
+      if (folderExists) {
+        console.log(`Directory already exists: ${dirPath}`);
+        return;
+      }
+
+      // Split path and create directories recursively
+      const parts = dirPath.split('/').filter(part => part.length > 0);
+      let currentPath = '';
+      
+      for (const part of parts) {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        
+        const exists = this.app.vault.getAbstractFileByPath(currentPath);
+        if (!exists) {
+          console.log(`Creating directory: ${currentPath}`);
+          await this.app.vault.createFolder(currentPath);
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to create directory ${dirPath}:`, error);
+      throw error;
+    }
   }
 
   async getGoogleDocsMetadata(file: TFile): Promise<any> {
@@ -1490,14 +1811,602 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   async getAuthenticatedDriveAPI(): Promise<DriveAPI> {
-    console.log('🔐 Getting authenticated Drive API client...');
+    // Check cache first
+    const now = Date.now();
+    if (this.driveAPICache && (now - this.driveAPICache.timestamp) < this.DRIVE_API_CACHE_TTL) {
+      return this.driveAPICache.api;
+    }
+
     try {
       const authClient = await this.authManager.getAuthClient();
-      console.log('✅ Auth client obtained, creating Drive API...');
-      return new DriveAPI(authClient.credentials.access_token);
+      const api = new DriveAPI(authClient.credentials.access_token);
+      
+      // Cache the API instance
+      this.driveAPICache = { api, timestamp: now };
+      
+      return api;
     } catch (error) {
       console.error('❌ Failed to get authenticated Drive API:', error);
+      // Clear cache on error
+      this.driveAPICache = null;
       throw error;
+    }
+  }
+
+  /**
+   * Clear the Drive API cache (useful after auth changes)
+   */
+  clearDriveAPICache(): void {
+    this.driveAPICache = null;
+  }
+
+  /**
+   * Discover and categorize local files in the vault
+   */
+  async discoverLocalFiles(): Promise<{
+    linked: Array<{ file: TFile; docId: string; path: string }>;
+    unlinked: Array<{ file: TFile; path: string }>;
+    suspicious: Array<{ file: TFile; path: string; issue: string }>;
+    total: number;
+  }> {
+    const files = this.app.vault.getMarkdownFiles();
+    const linked: Array<{ file: TFile; docId: string; path: string }> = [];
+    const unlinked: Array<{ file: TFile; path: string }> = [];
+    const suspicious: Array<{ file: TFile; path: string; issue: string }> = [];
+
+    for (const file of files) {
+      try {
+        const content = await this.app.vault.read(file);
+        const { frontmatter } = SyncUtils.parseFrontMatter(content);
+        const docId = frontmatter['google-doc-id'];
+
+        if (docId) {
+          linked.push({ file, docId, path: file.path });
+          
+          // Check for suspicious patterns
+          if (file.path.includes('New Folder')) {
+            suspicious.push({ file, path: file.path, issue: 'File in "New Folder" directory' });
+          }
+        } else {
+          unlinked.push({ file, path: file.path });
+        }
+      } catch (error) {
+        suspicious.push({ file, path: file.path, issue: `Failed to read file: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+
+    return {
+      linked,
+      unlinked,
+      suspicious,
+      total: files.length
+    };
+  }
+
+  /**
+   * Discover and analyze remote files in Google Drive
+   */
+  async discoverRemoteFiles(): Promise<{
+    docs: Array<{ id: string; name: string; path: string; relativePath: string }>;
+    duplicateFolders: Array<{ name: string; count: number; paths: string[] }>;
+    duplicateDocs: Array<{ name: string; count: number; ids: string[] }>;
+    suspiciousFolders: Array<{ name: string; path: string; id: string }>;
+    folderStats: Record<string, number>;
+    total: number;
+  }> {
+    const driveAPI = await this.getAuthenticatedDriveAPI();
+    const resolvedFolderId = await this.resolveDriveFolderId();
+    const allDocs = await driveAPI.listDocsInFolder(resolvedFolderId);
+
+    // Track folder paths for statistics only
+    const folderPathCounts = new Map<string, number>();
+    const docIdCounts = new Map<string, number>(); // Track if same Google Doc ID appears multiple times
+    const fullPathCounts = new Map<string, { id: string; name: string }[]>(); // Track if multiple docs want same local path
+    const suspiciousFolders: Array<{ name: string; path: string; id: string }> = [];
+
+    allDocs.forEach(doc => {
+      const folderPath = doc.relativePath || '(root)';
+      const fullPath = `${folderPath}/${doc.name}`.replace(/^\//, '');
+      
+      // Count documents per folder (for stats)
+      folderPathCounts.set(folderPath, (folderPathCounts.get(folderPath) || 0) + 1);
+
+      // Track Google Doc ID occurrences (real duplicates)
+      docIdCounts.set(doc.id, (docIdCounts.get(doc.id) || 0) + 1);
+
+      // Track full path conflicts (multiple docs trying to sync to same local path)
+      if (!fullPathCounts.has(fullPath)) {
+        fullPathCounts.set(fullPath, []);
+      }
+      fullPathCounts.get(fullPath)!.push({ id: doc.id, name: doc.name });
+
+      // Flag suspicious folders (documents in "New Folder" directories)
+      if (folderPath.includes('New Folder')) {
+        suspiciousFolders.push({ 
+          name: 'New Folder', 
+          path: folderPath, 
+          id: doc.id 
+        });
+      }
+    });
+
+    // NO duplicate folder detection - folders with same names in different locations are valid
+    const duplicateFolders: Array<{ name: string; count: number; paths: string[] }> = [];
+
+    // Find REAL duplicate issues: same Google Doc ID appearing multiple times
+    const duplicateDocs: Array<{ name: string; count: number; ids: string[] }> = [];
+    docIdCounts.forEach((count, docId) => {
+      if (count > 1) {
+        const doc = allDocs.find(d => d.id === docId);
+        if (doc) {
+          duplicateDocs.push({
+            name: doc.name,
+            count,
+            ids: [docId] // Same ID repeated
+          });
+        }
+      }
+    });
+
+    // Find path conflicts: multiple different documents trying to sync to same local path
+    fullPathCounts.forEach((docs, path) => {
+      if (docs.length > 1) {
+        // Multiple docs want the same local path - this is a real conflict
+        const uniqueIds = [...new Set(docs.map(d => d.id))];
+        if (uniqueIds.length > 1) {
+          duplicateDocs.push({
+            name: `Path conflict: ${path}`,
+            count: docs.length,
+            ids: uniqueIds
+          });
+        }
+      }
+    });
+
+    // Generate folder statistics (documents per folder path)
+    const folderStats: Record<string, number> = {};
+    folderPathCounts.forEach((count, path) => {
+      const folderName = path.split('/').pop() || '(root)';
+      folderStats[folderName] = (folderStats[folderName] || 0) + count;
+    });
+
+    return {
+      docs: allDocs.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        path: `${doc.relativePath || '(root)'}/${doc.name}`,
+        relativePath: doc.relativePath || '(root)'
+      })),
+      duplicateFolders,
+      duplicateDocs,
+      suspiciousFolders,
+      folderStats,
+      total: allDocs.length
+    };
+  }
+
+  /**
+   * Build a comprehensive sync plan by matching local and remote files
+   */
+  async buildSyncPlan(): Promise<{
+    localState: Awaited<ReturnType<typeof this.discoverLocalFiles>>;
+    remoteState: Awaited<ReturnType<typeof this.discoverRemoteFiles>>;
+    operations: {
+      pushToRemote: Array<{ localFile: TFile; action: 'create' | 'update'; reason: string }>;
+      pullFromRemote: Array<{ remoteDoc: { id: string; name: string; path: string }; action: 'create' | 'update'; reason: string; targetPath?: string }>;
+      conflicts: Array<{ localFile: TFile; remoteDoc: { id: string; name: string }; reason: string }>;
+      warnings: Array<{ type: 'duplicate-folder' | 'duplicate-document' | 'suspicious-pattern' | 'existing-file'; message: string; details: any }>;
+      safe: boolean;
+    };
+  }> {
+    console.log('🔍 Building comprehensive sync plan...');
+    
+    // Discover current state
+    const localState = await this.discoverLocalFiles();
+    const remoteState = await this.discoverRemoteFiles();
+    
+    // Initialize operation collections
+    const pushToRemote: Array<{ localFile: TFile; action: 'create' | 'update'; reason: string }> = [];
+    const pullFromRemote: Array<{ remoteDoc: { id: string; name: string; path: string }; action: 'create' | 'update'; reason: string; targetPath?: string }> = [];
+    const conflicts: Array<{ localFile: TFile; remoteDoc: { id: string; name: string }; reason: string }> = [];
+    const warnings: Array<{ type: 'duplicate-folder' | 'duplicate-document' | 'suspicious-pattern' | 'existing-file'; message: string; details: any }> = [];
+    
+    // Create lookup maps for efficient matching
+    const localByDocId = new Map<string, { file: TFile; docId: string; path: string }>();
+    const remoteById = new Map<string, { id: string; name: string; path: string; relativePath: string }>();
+    const localByPath = new Map<string, TFile>();
+    
+    localState.linked.forEach(local => {
+      localByDocId.set(local.docId, local);
+      localByPath.set(local.path, local.file);
+    });
+    
+    localState.unlinked.forEach(local => {
+      localByPath.set(local.path, local.file);
+    });
+    
+    remoteState.docs.forEach(remote => {
+      remoteById.set(remote.id, remote);
+    });
+    
+    // Analyze warnings for REAL issues only
+    if (remoteState.duplicateDocs.length > 0) {
+      remoteState.duplicateDocs.forEach(duplicate => {
+        warnings.push({
+          type: 'duplicate-document',
+          message: `Found ${duplicate.count} documents with conflict: "${duplicate.name}"`,
+          details: { name: duplicate.name, count: duplicate.count, ids: duplicate.ids }
+        });
+      });
+    }
+    
+    if (remoteState.suspiciousFolders.length > 0) {
+      warnings.push({
+        type: 'suspicious-pattern',
+        message: `Found ${remoteState.suspiciousFolders.length} suspicious "New Folder" entries`,
+        details: remoteState.suspiciousFolders
+      });
+    }
+    
+    if (localState.suspicious.length > 0) {
+      localState.suspicious.forEach(suspicious => {
+        warnings.push({
+          type: 'suspicious-pattern',
+          message: `Local file issue: ${suspicious.issue}`,
+          details: { path: suspicious.path, issue: suspicious.issue }
+        });
+      });
+    }
+    
+    // Process linked local files (files with google-doc-id)
+    for (const localLinked of localState.linked) {
+      const remoteDoc = remoteById.get(localLinked.docId);
+      
+      if (remoteDoc) {
+        // Both local and remote exist - check for updates needed
+        try {
+          const hasRemoteChanges = await this.hasRemoteChanges(localLinked.docId, localLinked.file.stat.mtime.toString());
+          const hasLocalChanges = await this.hasLocalChanges(localLinked.file);
+          
+          if (hasLocalChanges && hasRemoteChanges) {
+            conflicts.push({
+              localFile: localLinked.file,
+              remoteDoc: { id: remoteDoc.id, name: remoteDoc.name },
+              reason: 'Both local and remote files have been modified'
+            });
+          } else if (hasLocalChanges) {
+            pushToRemote.push({
+              localFile: localLinked.file,
+              action: 'update',
+              reason: 'Local file has been modified'
+            });
+          } else if (hasRemoteChanges) {
+            pullFromRemote.push({
+              remoteDoc,
+              action: 'update',
+              reason: 'Remote document has been modified',
+              targetPath: localLinked.path
+            });
+          }
+        } catch (error) {
+          warnings.push({
+            type: 'suspicious-pattern',
+            message: `Failed to check sync status for ${localLinked.path}`,
+            details: { path: localLinked.path, docId: localLinked.docId, error: error instanceof Error ? error.message : String(error) }
+          });
+        }
+      } else {
+        // Local file exists but remote is missing - check for path-based match
+        const expectedPath = localLinked.path.replace(/\.md$/, '');
+        const pathMatchedDoc = remoteState.docs.find(doc => {
+          const docPath = doc.relativePath === '(root)' ? doc.name : `${doc.relativePath}/${doc.name}`;
+          return docPath === expectedPath;
+        });
+        
+        if (pathMatchedDoc) {
+          // Found a document at the same path but with different ID - re-link it
+          console.log(`🔗 Re-linking ${localLinked.path}: old ID ${localLinked.docId} → new ID ${pathMatchedDoc.id}`);
+          
+          // Update the local file with the correct Google Doc ID
+          pushToRemote.push({
+            localFile: localLinked.file,
+            action: 'update',
+            reason: `Re-linking to existing document at same path (ID changed from ${localLinked.docId} to ${pathMatchedDoc.id})`
+          });
+          
+          // Add this to our lookup so it's not processed again
+          localByDocId.delete(localLinked.docId); // Remove old mapping
+          localByDocId.set(pathMatchedDoc.id, { ...localLinked, docId: pathMatchedDoc.id }); // Add new mapping
+          remoteById.set(pathMatchedDoc.id, pathMatchedDoc); // Ensure it's in remote lookup
+        } else {
+          // No document found at expected path - create new one
+          pushToRemote.push({
+            localFile: localLinked.file,
+            action: 'create',
+            reason: 'Local file has google-doc-id but document not found in Google Drive (no path match either)'
+          });
+        }
+      }
+    }
+    
+    // Process unlinked local files (files without google-doc-id)
+    for (const localUnlinked of localState.unlinked) {
+      // These could potentially be pushed to create new documents
+      pushToRemote.push({
+        localFile: localUnlinked.file,
+        action: 'create',
+        reason: 'Local file has no google-doc-id, could create new Google Doc'
+      });
+    }
+    
+    // Process remote docs that don't have local counterparts
+    for (const remoteDoc of remoteState.docs) {
+      const localLinked = localByDocId.get(remoteDoc.id);
+      
+      if (!localLinked) {
+        // Remote doc exists but no local file - should we pull?
+        const potentialLocalPath = this.calculateTargetPath(remoteDoc);
+        const existingFile = localByPath.get(potentialLocalPath);
+        
+        if (existingFile) {
+          // Check if this local file is in our linked files list
+          const existingLocalLinked = localState.linked.find(local => local.file === existingFile);
+          const existingLocalUnlinked = localState.unlinked.find(local => local.file === existingFile);
+          
+          if (existingLocalLinked && existingLocalLinked.docId !== remoteDoc.id) {
+            // Local file has a different ID but same path - re-link to the found remote doc
+            console.log(`🔗 Re-linking existing file ${potentialLocalPath}: ${existingLocalLinked.docId} → ${remoteDoc.id}`);
+            pullFromRemote.push({
+              remoteDoc,
+              action: 'update',
+              reason: `Re-linking existing local file to correct remote document (ID ${existingLocalLinked.docId} → ${remoteDoc.id})`,
+              targetPath: potentialLocalPath
+            });
+          } else if (existingLocalUnlinked) {
+            // Local file has no ID - link it to the remote doc
+            console.log(`🔗 Linking unlinked file ${potentialLocalPath} to remote doc ${remoteDoc.id}`);
+            pullFromRemote.push({
+              remoteDoc,
+              action: 'update',
+              reason: 'Linking existing unlinked local file to remote document',
+              targetPath: potentialLocalPath
+            });
+          } else {
+            // This shouldn't happen as it means same ID in both places (already processed above)
+            warnings.push({
+              type: 'existing-file',
+              message: `Remote document "${remoteDoc.name}" conflicts with existing local file (already processed or unexpected state)`,
+              details: { 
+                remoteName: remoteDoc.name, 
+                remoteId: remoteDoc.id, 
+                localPath: potentialLocalPath,
+                remoteRelativePath: remoteDoc.relativePath
+              }
+            });
+          }
+        } else {
+          pullFromRemote.push({
+            remoteDoc,
+            action: 'create',
+            reason: 'Remote document has no local counterpart',
+            targetPath: potentialLocalPath
+          });
+        }
+      }
+    }
+    
+    // Determine if sync plan is safe to execute - only block on real conflicts
+    const safe = warnings.filter(w => w.type === 'duplicate-document').length === 0 
+                && conflicts.length === 0;
+    
+    return {
+      localState,
+      remoteState,
+      operations: {
+        pushToRemote,
+        pullFromRemote,
+        conflicts,
+        warnings,
+        safe
+      }
+    };
+  }
+  
+  /**
+   * Calculate the target local path for a remote document
+   */
+  private calculateTargetPath(remoteDoc: { name: string; relativePath: string }): string {
+    if (remoteDoc.relativePath && remoteDoc.relativePath !== '(root)') {
+      return `${remoteDoc.relativePath}/${remoteDoc.name}.md`;
+    }
+    return `${remoteDoc.name}.md`;
+  }
+  
+  /**
+   * Check if local file has been modified since last sync
+   */
+  private async hasLocalChanges(file: TFile): Promise<boolean> {
+    try {
+      const content = await this.app.vault.read(file);
+      const { frontmatter } = SyncUtils.parseFrontMatter(content);
+      const lastSynced = frontmatter['last-synced'];
+      
+      if (!lastSynced) {
+        return true; // No sync history, assume changes
+      }
+      
+      const lastSyncTime = new Date(lastSynced);
+      const fileModified = new Date(file.stat.mtime);
+      
+      return fileModified > lastSyncTime;
+    } catch (error) {
+      console.error(`Failed to check local changes for ${file.path}:`, error);
+      return true; // If we can't check, assume changes
+    }
+  }
+
+  /**
+   * Log comprehensive sync plan to console for visibility
+   */
+  logSyncPlan(syncPlan: Awaited<ReturnType<typeof this.buildSyncPlan>>): void {
+    console.log('\n📋 ========== COMPREHENSIVE SYNC PLAN ==========');
+    
+    // Local State Summary
+    console.log('\n📁 LOCAL STATE:');
+    console.log(`   Total files: ${syncPlan.localState.total}`);
+    console.log(`   Linked (with google-doc-id): ${syncPlan.localState.linked.length}`);
+    console.log(`   Unlinked (no google-doc-id): ${syncPlan.localState.unlinked.length}`);
+    console.log(`   Suspicious: ${syncPlan.localState.suspicious.length}`);
+    
+    if (syncPlan.localState.linked.length > 0) {
+      console.log('\n   📎 Linked Files:');
+      syncPlan.localState.linked.forEach(file => {
+        console.log(`     • ${file.path} → ${file.docId}`);
+      });
+    }
+    
+    if (syncPlan.localState.unlinked.length > 0 && syncPlan.localState.unlinked.length <= 10) {
+      console.log('\n   🔗 Unlinked Files:');
+      syncPlan.localState.unlinked.forEach(file => {
+        console.log(`     • ${file.path}`);
+      });
+    } else if (syncPlan.localState.unlinked.length > 10) {
+      console.log(`\n   🔗 Unlinked Files: ${syncPlan.localState.unlinked.length} files (showing first 5):`);
+      syncPlan.localState.unlinked.slice(0, 5).forEach(file => {
+        console.log(`     • ${file.path}`);
+      });
+      console.log(`     ... and ${syncPlan.localState.unlinked.length - 5} more`);
+    }
+    
+    if (syncPlan.localState.suspicious.length > 0) {
+      console.log('\n   ⚠️  Suspicious Local Files:');
+      syncPlan.localState.suspicious.forEach(file => {
+        console.log(`     • ${file.path}: ${file.issue}`);
+      });
+    }
+    
+    // Remote State Summary
+    console.log('\n☁️  REMOTE STATE:');
+    console.log(`   Total documents: ${syncPlan.remoteState.total}`);
+    console.log(`   Document conflicts: ${syncPlan.remoteState.duplicateDocs.length}`);
+    console.log(`   Suspicious folders: ${syncPlan.remoteState.suspiciousFolders.length}`);
+    
+    if (syncPlan.remoteState.folderStats) {
+      console.log('\n   📂 Folder Distribution:');
+      Object.entries(syncPlan.remoteState.folderStats).forEach(([folderName, count]) => {
+        console.log(`     • ${folderName}: ${count} documents`);
+      });
+    }
+    
+    if (syncPlan.remoteState.duplicateDocs.length > 0) {
+      console.log('\n   📄 Document Conflicts:');
+      syncPlan.remoteState.duplicateDocs.forEach(duplicate => {
+        console.log(`     • "${duplicate.name}" has ${duplicate.count} conflicts with IDs:`);
+        duplicate.ids.forEach(id => {
+          console.log(`       - ${id}`);
+        });
+      });
+    }
+    
+    // Operations Summary
+    console.log('\n🔄 PLANNED OPERATIONS:');
+    console.log(`   Push to remote: ${syncPlan.operations.pushToRemote.length}`);
+    console.log(`   Pull from remote: ${syncPlan.operations.pullFromRemote.length}`);
+    console.log(`   Conflicts: ${syncPlan.operations.conflicts.length}`);
+    console.log(`   Warnings: ${syncPlan.operations.warnings.length}`);
+    console.log(`   Safe to execute: ${syncPlan.operations.safe ? '✅ YES' : '❌ NO'}`);
+    
+    if (syncPlan.operations.pushToRemote.length > 0) {
+      console.log('\n   ⬆️  PUSH TO REMOTE:');
+      syncPlan.operations.pushToRemote.forEach(op => {
+        console.log(`     • ${op.action.toUpperCase()}: ${op.localFile.path}`);
+        console.log(`       Reason: ${op.reason}`);
+      });
+    }
+    
+    if (syncPlan.operations.pullFromRemote.length > 0) {
+      console.log('\n   ⬇️  PULL FROM REMOTE:');
+      syncPlan.operations.pullFromRemote.forEach(op => {
+        console.log(`     • ${op.action.toUpperCase()}: ${op.remoteDoc.name} (${op.remoteDoc.id})`);
+        console.log(`       Target: ${op.targetPath || 'TBD'}`);
+        console.log(`       Reason: ${op.reason}`);
+      });
+    }
+    
+    if (syncPlan.operations.conflicts.length > 0) {
+      console.log('\n   ⚔️  CONFLICTS:');
+      syncPlan.operations.conflicts.forEach(conflict => {
+        console.log(`     • Local: ${conflict.localFile.path}`);
+        console.log(`       Remote: ${conflict.remoteDoc.name} (${conflict.remoteDoc.id})`);
+        console.log(`       Issue: ${conflict.reason}`);
+      });
+    }
+    
+    if (syncPlan.operations.warnings.length > 0) {
+      console.log('\n   ⚠️  WARNINGS:');
+      syncPlan.operations.warnings.forEach(warning => {
+        console.log(`     • [${warning.type}] ${warning.message}`);
+        if (warning.type === 'existing-file') {
+          const details = warning.details;
+          console.log(`       Remote: ${details.remoteName} (${details.remoteId})`);
+          console.log(`       Local: ${details.localPath}`);
+        } else if (warning.type === 'duplicate-folder' || warning.type === 'duplicate-document') {
+          console.log(`       Count: ${warning.details.count}`);
+        }
+      });
+    }
+    
+    // Safety Assessment
+    console.log('\n🛡️  SAFETY ASSESSMENT:');
+    if (syncPlan.operations.safe) {
+      console.log('   ✅ Sync plan appears safe to execute');
+      console.log('   ✅ No document conflicts detected');
+      console.log('   ✅ No sync conflicts detected');
+    } else {
+      console.log('   ❌ Sync plan has conflicts:');
+      
+      const duplicateDocWarnings = syncPlan.operations.warnings.filter(w => w.type === 'duplicate-document');
+      
+      if (duplicateDocWarnings.length > 0) {
+        console.log(`   ❌ ${duplicateDocWarnings.length} document conflict(s) detected`);
+      }
+      
+      if (syncPlan.operations.conflicts.length > 0) {
+        console.log(`   ❌ ${syncPlan.operations.conflicts.length} sync conflict(s) detected`);
+      }
+      
+      console.log('\n   🔧 RECOMMENDED ACTIONS:');
+      if (duplicateDocWarnings.length > 0) {
+        console.log('     1. Resolve duplicate Google Doc IDs or path conflicts');
+        console.log('     2. Ensure no two documents sync to the same local path');
+        console.log('     3. Re-run sync plan analysis after resolving conflicts');
+      }
+      
+      if (syncPlan.operations.conflicts.length > 0) {
+        console.log('     1. Resolve conflicts manually by choosing which version to keep');
+        console.log('     2. Consider using conflict resolution tools');
+      }
+    }
+    
+    console.log('\n===============================================\n');
+  }
+
+  /**
+   * Resolve folder name or ID to actual folder ID and validate it exists
+   */
+  async resolveDriveFolderId(): Promise<string> {
+    if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
+      throw new Error('Google Drive folder not configured. Please set the Drive folder ID in plugin settings.');
+    }
+
+    const driveAPI = await this.getAuthenticatedDriveAPI();
+    try {
+      const resolvedId = await driveAPI.resolveFolderId(this.settings.driveFolderId.trim());
+      console.log(`✅ Resolved folder "${this.settings.driveFolderId}" to ID: ${resolvedId}`);
+      return resolvedId;
+    } catch (error) {
+      console.error(`❌ Failed to resolve folder "${this.settings.driveFolderId}":`, error);
+      throw new Error(`Cannot access Google Drive folder "${this.settings.driveFolderId}". Please check the folder ID/name and your permissions.`);
     }
   }
 
@@ -1514,9 +2423,34 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         return false;
       }
       
-      // Check if remote file was modified after last sync
+      // Validate and parse timestamps
       const remoteModified = new Date(fileInfo.modifiedTime);
-      const lastSyncTime = new Date(lastSynced);
+      if (isNaN(remoteModified.getTime())) {
+        console.warn(`Invalid remote modified time for ${docId}: ${fileInfo.modifiedTime}`);
+        return false;
+      }
+      
+      // Parse lastSynced - it could be a timestamp number or ISO string
+      let lastSyncTime: Date;
+      if (!lastSynced || lastSynced === 'undefined' || lastSynced === 'null') {
+        // No last sync time, assume changes exist
+        console.log(`No last sync time for ${docId}, assuming changes exist`);
+        return true;
+      }
+      
+      // Try parsing as timestamp number first (from file.stat.mtime)
+      const numericTime = Number(lastSynced);
+      if (!isNaN(numericTime)) {
+        lastSyncTime = new Date(numericTime);
+      } else {
+        // Try parsing as ISO string
+        lastSyncTime = new Date(lastSynced);
+      }
+      
+      if (isNaN(lastSyncTime.getTime())) {
+        console.warn(`Invalid last sync time for ${docId}: ${lastSynced}, assuming changes exist`);
+        return true;
+      }
       
       const hasChanges = remoteModified > lastSyncTime;
       console.log(`Remote changes for ${docId}: ${hasChanges} (remote: ${remoteModified.toISOString()}, lastSync: ${lastSyncTime.toISOString()})`);
@@ -2188,9 +3122,10 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       console.log(`Target Google Drive path for ${file.path}: ${targetPath}`);
 
       // Step 3: Ensure the folder structure exists in Google Drive
+      const baseFolderId = await this.resolveDriveFolderId();
       const targetFolderId = await driveAPI.ensureNestedFolders(
         targetPath.folderPath, 
-        this.settings.driveFolderId
+        baseFolderId
       );
 
       // Step 4: Search for existing document by name in the target folder
@@ -2279,13 +3214,23 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    */
   private calculateGoogleDrivePath(file: TFile): { folderPath: string; documentName: string } {
     let filePath = file.path;
+    console.log(`📂 calculateGoogleDrivePath for ${file.path}:`);
+    console.log(`  - Initial filePath: "${filePath}"`);
+    console.log(`  - baseVaultFolder setting: "${this.settings.baseVaultFolder || '(not set)'}"`);
     
     // Remove baseVaultFolder from the path if it exists
-    if (this.settings.baseVaultFolder) {
+    if (this.settings.baseVaultFolder && this.settings.baseVaultFolder.trim() !== '') {
       const baseFolder = this.settings.baseVaultFolder.replace(/\/$/, ''); // Remove trailing slash
+      console.log(`  - Processed baseFolder: "${baseFolder}"`);
+      
       if (filePath.startsWith(baseFolder + '/')) {
         filePath = filePath.substring(baseFolder.length + 1);
+        console.log(`  - After removing base folder: "${filePath}"`);
+      } else {
+        console.log(`  - File path doesn't start with base folder, keeping as-is`);
       }
+    } else {
+      console.log(`  - No base vault folder configured, using full path`);
     }
 
     // Split into folder path and filename
@@ -2293,11 +3238,18 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     const fileName = pathParts.pop() || file.name;
     const folderPath = pathParts.join('/');
 
+    console.log(`  - Path parts: [${pathParts.map(p => `"${p}"`).join(', ')}]`);
+    console.log(`  - fileName: "${fileName}"`);
+    console.log(`  - folderPath: "${folderPath}"`);
+
     // Convert filename to document name (remove .md extension)
     let documentName = fileName.replace(/\.md$/, '');
     
     // Convert underscores to spaces for Google Docs naming convention
     documentName = documentName.replace(/_/g, ' ');
+
+    console.log(`  - Final documentName: "${documentName}"`);
+    console.log(`  - Final folderPath: "${folderPath}"`);
 
     return {
       folderPath: folderPath || '', // Empty string means root of Drive folder
@@ -2353,16 +3305,27 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         throw new Error('No Google Doc ID found for file');
       }
       
-      const currentRemotePath = await driveAPI.getFilePath(docId);
+      const baseFolderId = await this.resolveDriveFolderId();
+      const currentRemotePath = await driveAPI.getFilePath(docId, baseFolderId);
       
       // Calculate what the new local path should be
       const newLocalPath = this.calculateLocalPathFromRemote(currentRemotePath);
       
-      if (newLocalPath !== file.path) {
-        // Need to move/rename the local file
-        const newTFile = await this.app.vault.rename(file, newLocalPath);
-        console.log(`✅ Moved local file ${file.path} → ${newLocalPath} to match remote location`);
+      // Validate that we actually need to move the file
+      if (newLocalPath === file.path) {
+        console.log(`✅ File ${file.path} already at correct location, no move needed`);
+        return;
       }
+      
+      // Check if destination already exists (to avoid collision)
+      const existingFile = this.app.vault.getAbstractFileByPath(newLocalPath);
+      if (existingFile && existingFile !== file) {
+        throw new Error(`Destination file already exists at ${newLocalPath}`);
+      }
+      
+      // Need to move/rename the local file
+      const newTFile = await this.app.vault.rename(file, newLocalPath);
+      console.log(`✅ Moved local file ${file.path} → ${newLocalPath} to match remote location`);
     } catch (error) {
       console.error(`Failed to sync remote move to local for ${file.path}:`, error);
       throw error;
@@ -2454,7 +3417,8 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     
     try {
       // Create the nested folder structure
-      const trashFolderId = await driveAPI.ensureNestedFolders(trashPath, this.settings.driveFolderId);
+      const baseFolderId = await this.resolveDriveFolderId();
+      const trashFolderId = await driveAPI.ensureNestedFolders(trashPath, baseFolderId);
       return trashFolderId;
     } catch (error) {
       console.error('Failed to create remote trash folder:', error);
@@ -2645,10 +3609,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       const { folderPath, documentName } = this.calculateGoogleDrivePath(file);
       
       // Ensure target folder exists
-      const targetFolderId = await driveAPI.ensureNestedFolders(folderPath, this.settings.driveFolderId);
+      const baseFolderId = await this.resolveDriveFolderId();
+      const targetFolderId = await driveAPI.ensureNestedFolders(folderPath, baseFolderId);
 
       // Create new Google Doc
-      const newDocId = await driveAPI.createDocument(documentName, markdown, targetFolderId);
+      const newDocId = await driveAPI.createGoogleDoc(documentName, markdown, targetFolderId);
 
       // Update frontmatter with new Google Doc information
       const updatedFrontmatter = {

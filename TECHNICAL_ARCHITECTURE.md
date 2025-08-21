@@ -39,6 +39,34 @@ Components
   - `setAppProperties(fileId, props)` / `getAppProperties(fileId)`
   - `createFolder(...)`, `listFoldersInFolder(...)`, `deleteFile(fileId)` (supporting ops)
 
+### Google Drive API: Corpora and Shared Drives
+
+**Critical implementation detail**: The Google Drive API uses a "corpora" parameter to determine which drive contexts to search:
+
+- `corpora: "user"` (default) - Only searches "My Drive" and "Shared with me"
+- `corpora: "drive"` - Searches a specific shared drive (requires driveId parameter)  
+- `corpora: "allDrives"` - Searches all accessible drives (performance impact)
+
+**Problem**: Folders in shared drives return 0 results with default corpora="user"
+
+**Solution**: 
+1. Detect if folder has driveId (indicates it's in a shared drive)
+2. When driveId exists, use `corpora: "drive"` with the driveId
+3. This ensures queries actually search the correct drive context
+
+**Implementation**: DriveAPI.ts automatically detects and handles both contexts:
+- `detectSharedDriveContext()` - Queries folder metadata to get driveId
+- `getQueryParams()` - Builds correct parameters based on drive context
+- `buildDriveApiUrl()` - Constructs API URLs with proper corpora parameters
+
+**Required parameters for shared drives**:
+```
+corpora: 'drive'
+driveId: [detected shared drive ID] 
+supportsAllDrives: true
+includeItemsFromAllDrives: true
+```
+
 - **Unified OAuth Architecture** (`src/auth/`)
   - **Two-Flow Design**: CLI uses localhost callback, Plugin uses out-of-band manual code entry
   - **Shared PKCE Implementation**: Both flows use Proof Key for Code Exchange for enhanced security
