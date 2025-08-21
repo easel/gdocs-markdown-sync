@@ -325,6 +325,12 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Initialize auth manager with plugin instance for token storage
     this.authManager = new PluginAuthManager(this.settings.profile, this);
 
+    // Register OAuth callback handler for iOS client redirect
+    this.registerObsidianProtocolHandler('com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe/oauth2callback', 
+      async (params) => {
+        await this.handleOAuthCallback(params);
+      });
+
     // Verify workspace and token validity on startup
     await this.verifyWorkspaceAndToken();
 
@@ -3007,11 +3013,14 @@ export default class GoogleDocsSyncPlugin extends Plugin {
       // Try to open browser with fallback strategies
       const browserOpened = await this.tryOpenBrowser(authUrl);
 
-      // Always show the unified auth modal that assumes browser opened
-      // but provides fallback for manual opening
-      new UnifiedAuthModal(this.app, authUrl, async (authCode: string) => {
-        await this.handleAuthCallback(authCode, oauthManager);
-      }).open();
+      if (browserOpened) {
+        new Notice('Browser opened for authentication. Complete the process in your browser to continue.', 10000);
+      } else {
+        // Fallback to manual code entry if browser fails to open
+        new UnifiedAuthModal(this.app, authUrl, async (authCode: string) => {
+          await this.handleAuthCallback(authCode, oauthManager);
+        }).open();
+      }
     } catch (error) {
       console.error('Auth flow failed:', error);
       new Notice(`Authentication failed: ${(error as Error).message}`);
@@ -3020,6 +3029,68 @@ export default class GoogleDocsSyncPlugin extends Plugin {
 
   // Store PKCE verifier for this auth session
   private pkceVerifier: string | null = null;
+
+  /**
+   * Handle OAuth callback from protocol handler
+   */
+  private async handleOAuthCallback(params: Record<string, string>): Promise<void> {
+    const { code, error } = params;
+    
+    if (error) {
+      console.error('OAuth error:', error);
+      new Notice(`Authentication failed: ${error}`);
+      return;
+    }
+    
+    if (!code) {
+      console.error('No authorization code received');
+      new Notice('Authentication failed: No authorization code received');
+      return;
+    }
+
+    if (!this.pkceVerifier) {
+      console.error('No PKCE verifier found');
+      new Notice('Authentication failed: No PKCE verifier found. Please restart the authentication flow.');
+      return;
+    }
+
+    const notice = new Notice('Processing OAuth callback...', 0);
+
+    try {
+      // Create UnifiedOAuthManager instance
+      const { ObsidianTokenStorage } = await import('./auth/ObsidianTokenStorage');
+      const tokenStorage = new ObsidianTokenStorage(this, this.authManager.profile || 'default');
+      const oauthManager = new UnifiedOAuthManager(tokenStorage, {
+        clientId: this.settings.clientId,
+        clientSecret: this.settings.clientSecret,
+      });
+
+      // Exchange code for tokens
+      const credentials = await oauthManager.exchangeCodeForTokens(code, this.pkceVerifier);
+
+      // Validate credentials
+      if (!credentials.access_token || !credentials.refresh_token) {
+        throw new Error('Invalid token response: missing required tokens');
+      }
+
+      await this.authManager.storeCredentials(credentials);
+
+      // Clear PKCE verifier
+      this.pkceVerifier = null;
+
+      notice.setMessage('✅ Authentication successful!');
+      setTimeout(() => notice.hide(), 3000);
+
+      // Trigger settings page update if available
+      if ((this as any).settingsTab) {
+        (this as any).settingsTab.updateAuthStatus?.();
+      }
+    } catch (error) {
+      console.error('OAuth callback failed:', error);
+      notice.setMessage(`❌ Authentication failed: ${(error as Error).message}`);
+      setTimeout(() => notice.hide(), 5000);
+    }
+  }
 
   /**
    * Handle auth callback with authorization code using UnifiedOAuthManager

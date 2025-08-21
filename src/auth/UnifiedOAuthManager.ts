@@ -22,22 +22,60 @@ export class UnifiedOAuthManager {
 
   private readonly SCOPES = [
     'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/documents',
   ];
 
-  // Public client ID for desktop apps (safe to expose)
-  private readonly PUBLIC_CLIENT_ID =
+  // Desktop client ID for CLI (can use localhost server)
+  private readonly DESKTOP_CLIENT_ID =
     process.env.GOOGLE_OAUTH_CLIENT_ID ||
     '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com';
 
-  // Client secret (needed for token exchange)
+  // iOS client ID for plugin (uses reversed client ID redirect)
+  private readonly IOS_CLIENT_ID =
+    process.env.GOOGLE_OAUTH_IOS_CLIENT_ID ||
+    '181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com';
+
+  // Client secret (only needed for desktop client)
   private readonly CLIENT_SECRET =
     process.env.GOOGLE_OAUTH_CLIENT_SECRET || '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';
 
   constructor(tokenStorage: TokenStorage, config?: OAuthConfig) {
     this.tokenStorage = tokenStorage;
     this.config = config || {};
+  }
+
+  /**
+   * Detect if running in browser/plugin context (not Node.js)
+   */
+  private isBrowserContext(): boolean {
+    return typeof process === 'undefined' || !process.versions?.node;
+  }
+
+  /**
+   * Get appropriate client ID based on environment
+   */
+  private getClientId(): string {
+    if (this.config.clientId) return this.config.clientId;
+    return this.isBrowserContext() ? this.IOS_CLIENT_ID : this.DESKTOP_CLIENT_ID;
+  }
+
+  /**
+   * Get appropriate client secret based on environment
+   * iOS clients don't need client secret
+   */
+  private getClientSecret(): string | undefined {
+    if (this.config.clientSecret) return this.config.clientSecret;
+    return this.isBrowserContext() ? undefined : this.CLIENT_SECRET;
+  }
+
+  /**
+   * Get reversed client ID for iOS redirect URI
+   */
+  private getReversedClientId(): string {
+    const clientId = this.getClientId();
+    // Convert 181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com
+    // to com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe
+    return clientId.split('.').reverse().join('.');
   }
 
   /**
@@ -225,7 +263,12 @@ export class UnifiedOAuthManager {
    */
   async getAuthorizationUrl(): Promise<{ url: string; codeVerifier: string }> {
     const { codeVerifier, codeChallenge } = await this.generatePKCE();
-    const redirectUri = 'urn:ietf:wg:oauth:2.0:oob'; // Out-of-band flow for manual code entry
+    
+    // Use iOS reversed client ID redirect for browser/plugin context
+    const redirectUri = this.isBrowserContext()
+      ? `${this.getReversedClientId()}:/oauth2callback`
+      : 'urn:ietf:wg:oauth:2.0:oob'; // Fallback for CLI (shouldn't be used)
+    
     const url = this.buildAuthUrl(codeChallenge, redirectUri);
     
     return { url, codeVerifier };
@@ -247,14 +290,16 @@ export class UnifiedOAuthManager {
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: new URLSearchParams({
-              client_id: this.config.clientId || this.PUBLIC_CLIENT_ID,
-              client_secret: this.config.clientSecret || this.CLIENT_SECRET,
-              code,
-              code_verifier: codeVerifier,
-              grant_type: 'authorization_code',
-              redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
-            }).toString(),
+            body: new URLSearchParams(Object.fromEntries([
+              ['client_id', this.getClientId()],
+              ...(this.getClientSecret() ? [['client_secret', this.getClientSecret()]] : []),
+              ['code', code],
+              ['code_verifier', codeVerifier],
+              ['grant_type', 'authorization_code'],
+              ['redirect_uri', this.isBrowserContext()
+                ? `${this.getReversedClientId()}:/oauth2callback`
+                : 'urn:ietf:wg:oauth:2.0:oob'],
+            ])).toString(),
           },
           getNetworkConfig(),
         );
@@ -321,7 +366,7 @@ export class UnifiedOAuthManager {
    */
   private buildAuthUrl(codeChallenge: string, redirectUri: string): string {
     const params = new URLSearchParams({
-      client_id: this.config.clientId || this.PUBLIC_CLIENT_ID,
+      client_id: this.getClientId(),
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: this.config.scopes?.join(' ') || this.SCOPES.join(' '),
@@ -344,8 +389,8 @@ export class UnifiedOAuthManager {
   ): Promise<Credentials> {
     const tokenRequestBody = new URLSearchParams({
       grant_type: 'authorization_code',
-      client_id: this.config.clientId || this.PUBLIC_CLIENT_ID,
-      client_secret: this.config.clientSecret || this.CLIENT_SECRET,
+      client_id: this.getClientId(),
+      client_secret: this.getClientSecret() || '',
       code: code,
       redirect_uri: redirectUri,
       code_verifier: codeVerifier,
@@ -416,8 +461,8 @@ export class UnifiedOAuthManager {
 
       const refreshRequestBody = new URLSearchParams({
         grant_type: 'refresh_token',
-        client_id: this.config.clientId || this.PUBLIC_CLIENT_ID,
-        client_secret: this.config.clientSecret || this.CLIENT_SECRET,
+        client_id: this.getClientId(),
+        client_secret: this.getClientSecret() || '',
         refresh_token: credentials.refresh_token,
       });
 
