@@ -26,7 +26,7 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     titleContainer.createEl('h2', { text: 'Google Docs Sync Settings' });
     const versionEl = titleContainer.createEl('span', { 
       cls: 'google-docs-sync-version',
-      text: `v${getBuildVersion()}`
+      text: getBuildVersion()
     });
 
     // Authentication Status & Controls (consolidated at top)

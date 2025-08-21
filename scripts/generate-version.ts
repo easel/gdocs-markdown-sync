@@ -108,12 +108,14 @@ async function updateManifestVersion(versionInfo: VersionInfo): Promise<void> {
     const manifestContent = fs.readFileSync(manifestPath, 'utf8');
     const manifest = JSON.parse(manifestContent);
 
-    // For Obsidian manifest, we need a semver-compatible version without 'v' prefix
-    // For dirty builds, we'll use base version with a pre-release identifier
+    // For Obsidian manifest, use simpler version format that Obsidian can handle
+    // Complex semver pre-release versions might cause Obsidian to fall back to 1.0.0
     let manifestVersion: string;
     if (versionInfo.isDirty) {
-      // Format: 1.0.0-dev.commit.timestamp (semver pre-release)
-      manifestVersion = `${versionInfo.version}-dev.${versionInfo.commit}.${versionInfo.timestamp}`;
+      // Simple incremental version for dev builds: 1.0.2, 1.0.3, etc.
+      const baseVersionParts = versionInfo.version.split('.');
+      const patchVersion = parseInt(baseVersionParts[2] || '0', 10);
+      manifestVersion = `${baseVersionParts[0]}.${baseVersionParts[1]}.${patchVersion + 1}`;
     } else {
       // Clean build: just use base version
       manifestVersion = versionInfo.version;
