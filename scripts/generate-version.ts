@@ -108,8 +108,16 @@ async function updateManifestVersion(versionInfo: VersionInfo): Promise<void> {
     const manifestContent = fs.readFileSync(manifestPath, 'utf8');
     const manifest = JSON.parse(manifestContent);
 
-    // Use full version for development builds, base version for clean builds
-    const manifestVersion = versionInfo.isDirty ? versionInfo.fullVersion : versionInfo.version;
+    // For Obsidian manifest, we need a semver-compatible version without 'v' prefix
+    // For dirty builds, we'll use base version with a pre-release identifier
+    let manifestVersion: string;
+    if (versionInfo.isDirty) {
+      // Format: 1.0.0-dev.commit.timestamp (semver pre-release)
+      manifestVersion = `${versionInfo.version}-dev.${versionInfo.commit}.${versionInfo.timestamp}`;
+    } else {
+      // Clean build: just use base version
+      manifestVersion = versionInfo.version;
+    }
 
     if (manifest.version !== manifestVersion) {
       manifest.version = manifestVersion;

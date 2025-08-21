@@ -1,7 +1,7 @@
 {
   "id": "google-docs-sync",
   "name": "Google Docs Sync",
-  "version": "v1.0.0-7474890*-20250821T020119",
+  "version": "1.0.1-dev.4dc5e1b.20250821T020729",
   "minAppVersion": "0.15.0",
   "description": "Bidirectional sync between Google Docs and Obsidian Markdown files",
   "author": "gdocs-markdown-sync team",
