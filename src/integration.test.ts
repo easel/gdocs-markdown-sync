@@ -31,7 +31,7 @@ function checkCLITokenExists(): boolean {
     const fs = require('fs');
 
     // Check CLI tokens (now PKCE-based)
-    const cliConfigDir = path.join(os.homedir(), '.config', 'gdocs-markdown-sync');
+    const cliConfigDir = path.join(os.homedir(), '.config', 'google-docs-sync');
     const cliTokenPath = path.join(cliConfigDir, `tokens-${ITEST_PROFILE}.json`);
 
     fs.accessSync(cliTokenPath, fs.constants.F_OK);
@@ -43,7 +43,7 @@ function checkCLITokenExists(): boolean {
 
 // Load CLI PKCE tokens
 async function loadCLIToken(profile: string = 'default'): Promise<any> {
-  const configDir = path.join(os.homedir(), '.config', 'gdocs-markdown-sync');
+  const configDir = path.join(os.homedir(), '.config', 'google-docs-sync');
   const tokenPath = path.join(configDir, `tokens-${profile}.json`);
 
   try {
@@ -51,7 +51,7 @@ async function loadCLIToken(profile: string = 'default'): Promise<any> {
     return JSON.parse(tokenData);
   } catch (error) {
     throw new Error(
-      `No CLI tokens found for profile "${profile}" at ${tokenPath}. Run: gdocs-markdown-sync auth`,
+      `No CLI tokens found for profile "${profile}" at ${tokenPath}. Run: google-docs-sync auth`,
     );
   }
 }

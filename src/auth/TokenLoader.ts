@@ -18,7 +18,7 @@ export class TokenLoader {
   }
 
   private getTokenDir(): string {
-    return path.join(os.homedir(), '.config', 'gdocs-markdown-sync');
+    return path.join(os.homedir(), '.config', 'google-docs-sync');
   }
 
   private getTokenPath(): string {

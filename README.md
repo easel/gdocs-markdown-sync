@@ -19,7 +19,7 @@ A complete TypeScript solution for bidirectional synchronization between Google 
 
 This project provides a **unified TypeScript codebase** that powers both:
 
-1. **CLI Tool** (`gdocs-markdown-sync`) - Standalone sync utility
+1. **CLI Tool** (`google-docs-sync`) - Standalone sync utility
 2. **Obsidian Plugin** - Vault-integrated sync with UI
 
 Both use the **same PKCE OAuth flow** for secure authentication without exposing client secrets.
@@ -31,21 +31,21 @@ Both use the **same PKCE OAuth flow** for secure authentication without exposing
 #### Option 1: Use with npx (Recommended)
 
 ```bash
-npx gdocs-markdown-sync --help
+npx google-docs-sync --help
 ```
 
 #### Option 2: Install globally
 
 ```bash
-npm install -g gdocs-markdown-sync
-gdocs-markdown-sync --help
+npm install -g google-docs-sync
+google-docs-sync --help
 ```
 
 ### Obsidian Plugin
 
 #### Option 1: Download from GitHub Releases (Recommended)
 
-1. Go to the [Releases page](https://github.com/user/gdocs-markdown-sync/releases)
+1. Go to the [Releases page](https://github.com/user/google-docs-sync/releases)
 2. Download `obsidian-google-docs-sync.zip` from the latest `plugin-v*` release
 3. Extract to your vault's `.obsidian/plugins/google-docs-sync/` directory
 4. Enable the plugin in Obsidian Settings → Community Plugins
@@ -60,26 +60,26 @@ See the [Development Setup](#development-setup) section below.
 
 ```bash
 # Secure PKCE OAuth flow - no client secrets needed!
-gdocs-markdown-sync auth
+google-docs-sync auth
 ```
 
 ### 2A. Use as CLI Tool
 
 ```bash
 # Pull Google Docs to local Markdown files
-gdocs-markdown-sync pull --drive-folder-id <folder-id> --local-dir ./docs
+google-docs-sync pull --drive-folder-id <folder-id> --local-dir ./docs
 
 # Push local Markdown files to Google Docs
-gdocs-markdown-sync push --drive-folder-id <folder-id> --local-dir ./docs
+google-docs-sync push --drive-folder-id <folder-id> --local-dir ./docs
 
 # Bidirectional sync
-gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs
+google-docs-sync sync --drive-folder-id <folder-id> --local-dir ./docs
 
 # Continuous sync (every 5 minutes) - CLI polling
-gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --watch --poll-interval 300
+google-docs-sync sync --drive-folder-id <folder-id> --local-dir ./docs --watch --poll-interval 300
 
 # One-time sync with conflict resolution
-gdocs-markdown-sync sync --drive-folder-id <folder-id> --local-dir ./docs --conflicts prefer-doc
+google-docs-sync sync --drive-folder-id <folder-id> --local-dir ./docs --conflicts prefer-doc
 ```
 
 ### 2B. Use as Obsidian Plugin
@@ -139,7 +139,7 @@ Choose how conflicts are resolved with the `--conflicts` flag:
 #### `prefer-doc` (Default)
 
 ```bash
-gdocs-markdown-sync sync --conflicts prefer-doc --drive-folder "My Docs" --local-dir ./docs
+google-docs-sync sync --conflicts prefer-doc --drive-folder "My Docs" --local-dir ./docs
 ```
 
 - Always uses the Google Doc version when conflicts occur
@@ -149,7 +149,7 @@ gdocs-markdown-sync sync --conflicts prefer-doc --drive-folder "My Docs" --local
 #### `prefer-md`
 
 ```bash
-gdocs-markdown-sync sync --conflicts prefer-md --drive-folder "My Docs" --local-dir ./docs
+google-docs-sync sync --conflicts prefer-md --drive-folder "My Docs" --local-dir ./docs
 ```
 
 - Always uses the Markdown file version when conflicts occur
@@ -159,7 +159,7 @@ gdocs-markdown-sync sync --conflicts prefer-md --drive-folder "My Docs" --local-
 #### `merge`
 
 ```bash
-gdocs-markdown-sync sync --conflicts merge --drive-folder "My Docs" --local-dir ./docs
+google-docs-sync sync --conflicts merge --drive-folder "My Docs" --local-dir ./docs
 ```
 
 - Attempts intelligent automatic merging of non-conflicting changes
@@ -195,7 +195,7 @@ To resolve:
 Use `--dry-run` to see what changes would be made without actually modifying files:
 
 ```bash
-gdocs-markdown-sync sync --dry-run --conflicts merge --drive-folder "My Docs" --local-dir ./docs
+google-docs-sync sync --dry-run --conflicts merge --drive-folder "My Docs" --local-dir ./docs
 ```
 
 ## Ignore Files
@@ -288,7 +288,7 @@ bun run test:unit     # Unit tests only
 
 ```bash
 # First authenticate
-gdocs-markdown-sync auth
+google-docs-sync auth
 
 # Then run integration tests
 bun run test:integration
@@ -297,7 +297,7 @@ bun run test:integration
 ## Security
 
 ✅ **PKCE OAuth 2.0**: No client secrets stored or required  
-✅ **Secure Token Storage**: Tokens saved locally in `~/.config/gdocs-markdown-sync/`  
+✅ **Secure Token Storage**: Tokens saved locally in `~/.config/google-docs-sync/`  
 ✅ **Scoped Permissions**: Only requests necessary Google Drive/Docs permissions  
 ✅ **Local Operation**: No data sent to third-party servers
 
@@ -307,7 +307,7 @@ For contributors or users who want to build from source:
 
 ```bash
 git clone <repo-url>
-cd gdocs-markdown-sync
+cd google-docs-sync
 bun install
 bun run build
 ```
@@ -361,8 +361,8 @@ src/
 
 ### CLI Authentication (PKCE - Recommended)
 - **No client secret required** - uses secure PKCE flow with public client
-- **Simple setup**: Run `gdocs-markdown-sync auth` and follow browser prompts
-- **Token storage**: Tokens saved to `~/.config/gdocs-markdown-sync/tokens-<profile>.json`
+- **Simple setup**: Run `google-docs-sync auth` and follow browser prompts
+- **Token storage**: Tokens saved to `~/.config/google-docs-sync/tokens-<profile>.json`
 - **Override client**: Optionally set `GOOGLE_OAUTH_CLIENT_ID` environment variable
 
 ### Obsidian Plugin Authentication

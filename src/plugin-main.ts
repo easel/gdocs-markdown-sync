@@ -325,11 +325,17 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     // Initialize auth manager with plugin instance for token storage
     this.authManager = new PluginAuthManager(this.settings.profile, this);
 
-    // Register OAuth callback handler for iOS client redirect
-    this.registerObsidianProtocolHandler('com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe/oauth2callback', 
-      async (params) => {
-        await this.handleOAuthCallback(params);
-      });
+    // Register OAuth callback handler for iOS client redirect using centralized config
+    const tokenStorage = this.authManager.getTokenStorage();
+    const tempOAuthManager = new UnifiedOAuthManager(tokenStorage, { isPlugin: true });
+    const protocolPath = tempOAuthManager.getProtocolHandlerPath();
+    
+    if (protocolPath) {
+      this.registerObsidianProtocolHandler(protocolPath, 
+        async (params) => {
+          await this.handleOAuthCallback(params);
+        });
+    }
 
     // Verify workspace and token validity on startup
     await this.verifyWorkspaceAndToken();
@@ -2998,12 +3004,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
         return;
       }
 
-      // Create UnifiedOAuthManager with plugin settings
+      // Create UnifiedOAuthManager with plugin flag to force iOS client
       const { ObsidianTokenStorage } = await import('./auth/ObsidianTokenStorage');
       const tokenStorage = new ObsidianTokenStorage(this, this.authManager.profile || 'default');
       const oauthManager = new UnifiedOAuthManager(tokenStorage, {
-        clientId: this.settings.clientId,
-        clientSecret: this.settings.clientSecret,
+        isPlugin: true, // Force iOS client usage
       });
 
       // Get authorization URL with PKCE parameters
@@ -3057,12 +3062,11 @@ export default class GoogleDocsSyncPlugin extends Plugin {
     const notice = new Notice('Processing OAuth callback...', 0);
 
     try {
-      // Create UnifiedOAuthManager instance
+      // Create UnifiedOAuthManager instance with plugin flag
       const { ObsidianTokenStorage } = await import('./auth/ObsidianTokenStorage');
       const tokenStorage = new ObsidianTokenStorage(this, this.authManager.profile || 'default');
       const oauthManager = new UnifiedOAuthManager(tokenStorage, {
-        clientId: this.settings.clientId,
-        clientSecret: this.settings.clientSecret,
+        isPlugin: true, // Force iOS client usage
       });
 
       // Exchange code for tokens

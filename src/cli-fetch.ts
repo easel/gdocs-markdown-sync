@@ -19,13 +19,13 @@ import { Logger, LogLevel, createLogger } from './utils/Logger.js';
 import { getBuildVersion } from './version.js';
 
 function printHelp(): void {
-  console.log(`gdocs-markdown-sync ${getBuildVersion()} (Fetch-based CLI)
+  console.log(`google-docs-sync ${getBuildVersion()} (Fetch-based CLI)
 
 Usage:
-  gdocs-markdown-sync auth
-  gdocs-markdown-sync pull --drive-folder <name|id> --local-dir <path>
-  gdocs-markdown-sync push --drive-folder <name|id> --local-dir <path>
-  gdocs-markdown-sync sync --drive-folder <name|id> --local-dir <path>
+  google-docs-sync auth
+  google-docs-sync pull --drive-folder <name|id> --local-dir <path>
+  google-docs-sync push --drive-folder <name|id> --local-dir <path>
+  google-docs-sync sync --drive-folder <name|id> --local-dir <path>
 
 Flags:
   --drive-folder      Google Drive folder name or ID (env: DRIVE_FOLDER)
@@ -65,6 +65,41 @@ async function cmdAuth() {
     await authManager.startAuthFlow();
 
     operation.success('✅ OAuth authentication complete.');
+    
+    // Display workspace information
+    try {
+      const driveAPI = await getDriveAPI();
+      const response = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+        headers: {
+          'Authorization': `Bearer ${driveAPI.getAccessToken()}`,
+        },
+      });
+      
+      if (response.ok) {
+        const userInfo = await response.json();
+        const email = userInfo.user?.emailAddress || 'Unknown email';
+        const displayName = userInfo.user?.displayName || 'Unknown';
+        const domain = email.includes('@') ? email.split('@')[1] : 'Unknown domain';
+        
+        operation.info(`👤 Authenticated as: ${displayName} (${email})`);
+        operation.info(`🏢 Workspace Domain: ${domain}`);
+        
+        // Display storage quota if available
+        if (userInfo.storageQuota) {
+          const used = parseInt(userInfo.storageQuota.usage || '0');
+          const limit = parseInt(userInfo.storageQuota.limit || '0');
+          if (used && limit) {
+            const usedGB = (used / (1024 * 1024 * 1024)).toFixed(1);
+            const limitGB = (limit / (1024 * 1024 * 1024)).toFixed(1);
+            const percentage = ((used / limit) * 100).toFixed(1);
+            operation.info(`💾 Storage: ${usedGB}GB / ${limitGB}GB (${percentage}%)`);
+          }
+        }
+      }
+    } catch (error) {
+      // Don't fail the auth command if workspace info fetch fails
+      operation.warn('Could not fetch workspace details, but authentication succeeded');
+    }
   } catch (error) {
     operation.failure(
       '❌ OAuth authentication failed',

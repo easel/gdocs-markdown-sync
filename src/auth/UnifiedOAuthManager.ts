@@ -9,7 +9,36 @@ export interface OAuthConfig {
   clientId?: string;
   clientSecret?: string;
   scopes?: string[];
+  isPlugin?: boolean; // Force plugin/iOS client mode
 }
+
+interface OAuthClientConfig {
+  clientId: string;
+  clientSecret?: string;  // iOS doesn't need it
+  redirectUriPattern: (param?: any) => string;
+  protocolHandlerPath?: string;  // For Obsidian protocol registration
+}
+
+// Centralized OAuth configuration for different client types
+const OAUTH_CONFIGS: Record<string, OAuthClientConfig> = {
+  desktop: {
+    clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || 
+      '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com',
+    clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || 
+      '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',
+    redirectUriPattern: (port: number) => `http://localhost:${port}/callback`,
+  },
+  ios: {
+    clientId: process.env.GOOGLE_OAUTH_IOS_CLIENT_ID || 
+      '181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com',
+    clientSecret: undefined,  // iOS clients don't use secret
+    redirectUriPattern: (clientId: string) => {
+      const reversed = clientId.split('.').reverse().join('.');
+      return `${reversed}:/oauth2redirect/google`;
+    },
+    protocolHandlerPath: 'com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe/oauth2redirect/google',
+  }
+};
 
 /**
  * Unified OAuth manager that works in both CLI and Obsidian environments
@@ -25,20 +54,6 @@ export class UnifiedOAuthManager {
     'https://www.googleapis.com/auth/documents',
   ];
 
-  // Desktop client ID for CLI (can use localhost server)
-  private readonly DESKTOP_CLIENT_ID =
-    process.env.GOOGLE_OAUTH_CLIENT_ID ||
-    '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com';
-
-  // iOS client ID for plugin (uses reversed client ID redirect)
-  private readonly IOS_CLIENT_ID =
-    process.env.GOOGLE_OAUTH_IOS_CLIENT_ID ||
-    '181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com';
-
-  // Client secret (only needed for desktop client)
-  private readonly CLIENT_SECRET =
-    process.env.GOOGLE_OAUTH_CLIENT_SECRET || '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';
-
   constructor(tokenStorage: TokenStorage, config?: OAuthConfig) {
     this.tokenStorage = tokenStorage;
     this.config = config || {};
@@ -48,7 +63,20 @@ export class UnifiedOAuthManager {
    * Detect if running in browser/plugin context (not Node.js)
    */
   private isBrowserContext(): boolean {
+    // Explicit plugin flag overrides detection
+    if (this.config.isPlugin !== undefined) {
+      return this.config.isPlugin;
+    }
+    // Fallback to environment detection (unreliable in Electron)
     return typeof process === 'undefined' || !process.versions?.node;
+  }
+
+  /**
+   * Get appropriate OAuth configuration based on environment
+   */
+  private getOAuthConfig(): OAuthClientConfig {
+    const configKey = this.isBrowserContext() ? 'ios' : 'desktop';
+    return OAUTH_CONFIGS[configKey];
   }
 
   /**
@@ -56,26 +84,30 @@ export class UnifiedOAuthManager {
    */
   private getClientId(): string {
     if (this.config.clientId) return this.config.clientId;
-    return this.isBrowserContext() ? this.IOS_CLIENT_ID : this.DESKTOP_CLIENT_ID;
+    return this.getOAuthConfig().clientId;
   }
 
   /**
    * Get appropriate client secret based on environment
-   * iOS clients don't need client secret
    */
   private getClientSecret(): string | undefined {
     if (this.config.clientSecret) return this.config.clientSecret;
-    return this.isBrowserContext() ? undefined : this.CLIENT_SECRET;
+    return this.getOAuthConfig().clientSecret;
   }
 
   /**
-   * Get reversed client ID for iOS redirect URI
+   * Get redirect URI for the current OAuth config
    */
-  private getReversedClientId(): string {
-    const clientId = this.getClientId();
-    // Convert 181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com
-    // to com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe
-    return clientId.split('.').reverse().join('.');
+  private getRedirectUri(param?: any): string {
+    const oauthConfig = this.getOAuthConfig();
+    return oauthConfig.redirectUriPattern(param || oauthConfig.clientId);
+  }
+
+  /**
+   * Get protocol handler path for Obsidian plugin registration
+   */
+  getProtocolHandlerPath(): string | undefined {
+    return this.getOAuthConfig().protocolHandlerPath;
   }
 
   /**
@@ -183,7 +215,7 @@ export class UnifiedOAuthManager {
 
         console.log(`OAuth callback server started on port ${port}`);
 
-        const redirectUri = `http://localhost:${port}/callback`;
+        const redirectUri = this.getRedirectUri(port);
         const authUrl = this.buildAuthUrl(codeChallenge, redirectUri);
 
         console.log('Opening browser for OAuth authorization...');
@@ -210,7 +242,6 @@ export class UnifiedOAuthManager {
             const credentials = await this.exchangeCodeForTokens(
               code as string,
               codeVerifier,
-              redirectUri,
             );
 
             res.send(`
@@ -264,11 +295,8 @@ export class UnifiedOAuthManager {
   async getAuthorizationUrl(): Promise<{ url: string; codeVerifier: string }> {
     const { codeVerifier, codeChallenge } = await this.generatePKCE();
     
-    // Use iOS reversed client ID redirect for browser/plugin context
-    const redirectUri = this.isBrowserContext()
-      ? `${this.getReversedClientId()}:/oauth2callback`
-      : 'urn:ietf:wg:oauth:2.0:oob'; // Fallback for CLI (shouldn't be used)
-    
+    // Get redirect URI from centralized config
+    const redirectUri = this.getRedirectUri();
     const url = this.buildAuthUrl(codeChallenge, redirectUri);
     
     return { url, codeVerifier };
@@ -283,6 +311,8 @@ export class UnifiedOAuthManager {
 
     return ErrorUtils.withErrorContext(
       async () => {
+        const redirectUri = this.getRedirectUri();
+        
         const tokenResponse = await NetworkUtils.fetchWithRetry(
           'https://oauth2.googleapis.com/token',
           {
@@ -296,9 +326,7 @@ export class UnifiedOAuthManager {
               ['code', code],
               ['code_verifier', codeVerifier],
               ['grant_type', 'authorization_code'],
-              ['redirect_uri', this.isBrowserContext()
-                ? `${this.getReversedClientId()}:/oauth2callback`
-                : 'urn:ietf:wg:oauth:2.0:oob'],
+              ['redirect_uri', redirectUri],
             ])).toString(),
           },
           getNetworkConfig(),
@@ -379,68 +407,6 @@ export class UnifiedOAuthManager {
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
-  /**
-   * Exchange authorization code for tokens
-   */
-  private async exchangeCodeForTokens(
-    code: string,
-    codeVerifier: string,
-    redirectUri: string,
-  ): Promise<Credentials> {
-    const tokenRequestBody = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: this.getClientId(),
-      client_secret: this.getClientSecret() || '',
-      code: code,
-      redirect_uri: redirectUri,
-      code_verifier: codeVerifier,
-    });
-
-    const context: ErrorContext = {
-      operation: 'exchange-code-for-tokens',
-      metadata: { code: code.substring(0, 10) + '...' },
-    };
-
-    return ErrorUtils.withErrorContext(async () => {
-      try {
-        const response = await NetworkUtils.fetchWithRetry(
-          'https://oauth2.googleapis.com/token',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: tokenRequestBody,
-          },
-          { timeout: getNetworkConfig().timeout },
-        );
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new AuthenticationError(
-            `Token exchange failed: ${errorData.error_description || errorData.error}`,
-            context,
-          );
-        }
-
-        const tokens = await response.json();
-
-        return {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-          token_type: tokens.token_type || 'Bearer',
-          expiry_date: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
-          scope: tokens.scope,
-        };
-      } catch (error) {
-        throw new AuthenticationError(
-          `Token exchange failed: ${error instanceof Error ? error.message : String(error)}`,
-          context,
-          error instanceof Error ? error : undefined,
-        );
-      }
-    }, context)();
-  }
 
   /**
    * Refresh expired tokens

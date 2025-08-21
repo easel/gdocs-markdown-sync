@@ -20,7 +20,7 @@ TypeScript codebase implementing bidirectional Google Docs ↔ Markdown synchron
 
 ```bash
 bun install                    # Install dependencies
-bun run build                  # Build all targets
+bun run build                  # Build both CLI and plugin
 bun run check                  # Run typecheck, lint, tests, format check (REQUIRED after changes)
 bun run format                 # Auto-fix code formatting (required for CI)
 bun run lint:fix              # Fix linting issues (import order, unused vars, etc.)
@@ -50,6 +50,11 @@ bun run test:integration      # Integration tests (requires auth)
 **IMPORTANT: Plugin directory name is `google-docs-sync` (from manifest.json ID)**
 
 ```bash
+# Deploy to synaptiq_ops vault (builds plugin first)
+bun run deploy:synaptiq
+# OR
+make deploy-synaptiq
+
 # Build and package plugin for distribution
 bun run package:plugin
 # Creates dist/plugin.zip with main.js, manifest.json, and styles.css
@@ -59,6 +64,34 @@ bun run build:plugin
 # Copy dist/* to vault/.obsidian/plugins/google-docs-sync/
 # Note: plugin.js gets renamed to main.js during build
 ```
+
+### Build System
+
+- `bun run build` - Builds **both** CLI and plugin (ensures consistency)
+- `bun run build:cli` - CLI only 
+- `bun run build:plugin` - Plugin only
+- Deployment always shows version being deployed and verifies after copy
+
+### Troubleshooting Builds
+
+If you see version mismatches:
+1. Run `bun run build` (builds both targets)
+2. Run `bun run verify-build` to check build status
+3. Check `dist/manifest.json` has correct version
+4. Deploy with `bun run deploy:synaptiq` for automatic verification
+
+### Build Verification
+
+```bash
+bun run verify-build    # Check if builds are current and complete
+make verify-build       # Same via Makefile
+```
+
+This checks:
+- All required files exist in `dist/`
+- File sizes are reasonable
+- Build timestamp (warns if >10 minutes old)
+- Shows version being built
 
 ## CLI Interface
 

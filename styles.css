@@ -569,3 +569,43 @@
     opacity: 1;
   }
 }
+
+/* Workspace Information Styles */
+.workspace-info {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--background-primary-alt);
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.workspace-title {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 4px;
+}
+
+.workspace-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workspace-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.workspace-detail-monospace {
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  color: var(--text-accent);
+  background: var(--background-secondary);
+  padding: 4px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+}

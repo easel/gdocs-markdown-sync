@@ -108,14 +108,17 @@ async function updateManifestVersion(versionInfo: VersionInfo): Promise<void> {
     const manifestContent = fs.readFileSync(manifestPath, 'utf8');
     const manifest = JSON.parse(manifestContent);
 
-    // Keep manifest.json version static to avoid git conflicts
-    // Only update it during releases, not on every build
-    // The runtime version display uses version.ts which is gitignored
-    const currentManifestVersion = manifest.version;
-    console.log(`Manifest version (static): ${currentManifestVersion}`);
+    // Update manifest with detailed version for plugin deployment
+    const oldVersion = manifest.version;
+    manifest.version = versionInfo.fullVersion;
+    
+    // Write updated manifest
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+    
+    console.log(`Manifest version updated: ${oldVersion} → ${versionInfo.fullVersion}`);
     console.log(`Runtime version (dynamic): ${versionInfo.fullVersion}`);
   } catch (error) {
-    console.warn('Could not read manifest.json version:', error);
+    console.warn('Could not update manifest.json version:', error);
   }
 }
 

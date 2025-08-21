@@ -15,6 +15,8 @@ export interface GoogleDocsSyncSettings {
   deleteHandling?: 'archive' | 'ignore' | 'sync'; // How to handle deletions (default: 'archive')
   archiveRetentionDays?: number; // Days to keep archived files (default: 30)
   showDeletionWarnings?: boolean; // Show warnings for delete operations (default: true)
+  // Cross-workspace document handling
+  handleCrossWorkspaceDocs?: 'auto-relink' | 'warn' | 'skip'; // How to handle docs from different workspaces (default: 'auto-relink')
 }
 
 export interface GoogleDocsSyncPluginData {

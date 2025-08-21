@@ -5,12 +5,14 @@ ACT_IMAGE ?= catthehacker/ubuntu:act-latest
 ACT_ARCH ?= linux/amd64
 DOCKER_HOST ?= unix:///var/run/docker.sock
 
-.PHONY: help install build build-cli build-plugin lint lint-fix typecheck test coverage format format-check check gitleaks act-ci act-gitleaks act-codeql act-semgrep act-zap act-release act-all release-zip
+.PHONY: help install build build-cli build-plugin lint lint-fix typecheck test coverage format format-check check gitleaks deploy-synaptiq verify-build act-ci act-gitleaks act-codeql act-semgrep act-zap act-release act-all release-zip
 
 help:
 	@echo "Common targets:"
 	@echo "  make install        # Install dependencies"
-	@echo "  make build          # Build CLI and plugin"
+	@echo "  make build          # Build both CLI and plugin"
+	@echo "  make deploy-synaptiq # Build plugin and deploy to synaptiq_ops"
+	@echo "  make verify-build    # Verify build outputs are current"
 	@echo "  make lint           # Run ESLint"
 	@echo "  make lint-fix       # ESLint with --fix"
 	@echo "  make typecheck      # TypeScript typecheck"
@@ -63,6 +65,12 @@ format-check:
 
 check:
 	$(BUN) run check
+
+deploy-synaptiq:
+	$(BUN) run deploy:synaptiq
+
+verify-build:
+	$(BUN) run verify-build
 
 # Security (optional local run)
 gitleaks:

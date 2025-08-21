@@ -282,6 +282,6 @@ export class ConfigValidator {
 
 // Default config paths for different environments
 export const CONFIG_PATHS = {
-  cli: '~/.config/gdocs-markdown-sync/config.json',
-  plugin: '.obsidian/plugins/gdocs-markdown-sync/config.json',
+  cli: '~/.config/google-docs-sync/config.json',
+  plugin: '.obsidian/plugins/google-docs-sync/config.json',
 } as const;

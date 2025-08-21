@@ -37,12 +37,23 @@
       "Bash(mkdir:*)",
       "Bash(rm:*)",
       "Bash(find:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "WebFetch(domain:docs.obsidian.md)",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:help.obsidian.md)",
+      "Bash(RUN_INTEGRATION_TESTS=true bun test src/folder-sync.integration.test.ts)",
+      "Bash(chmod:*)",
+      "Bash(./scripts/deploy-to-synaptiq.sh:*)",
+      "Bash(osascript:*)",
+      "Bash(RUN_INTEGRATION_TESTS=true bun test src/folder-sync.integration.test.ts --grep \"document parent folder consistency\")",
+      "WebFetch(domain:fleker.medium.com)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": [],
     "additionalDirectories": [
-      "/Users/erik/.config/gdocs-markdown-sync"
+      "/Users/erik/.config/gdocs-markdown-sync",
+      "/Users/erik/Projects/synaptiq_ops/.obsidian/plugins"
     ]
   }
 }

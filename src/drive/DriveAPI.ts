@@ -56,6 +56,90 @@ export class DriveAPI {
   }
 
   /**
+   * Get the access token for API calls
+   */
+  getAccessToken(): string {
+    const authHeader = this.authHeaders.Authorization;
+    if (!authHeader) {
+      throw new Error('No authorization header found');
+    }
+    // Extract token from "<type> <token>" format
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2) {
+      throw new Error('Invalid authorization header format');
+    }
+    return parts[1];
+  }
+
+  /**
+   * Validate that a document belongs to the currently authenticated workspace.
+   * Returns true if the document is accessible in the current workspace, false otherwise.
+   */
+  async validateDocumentInCurrentWorkspace(docId: string): Promise<boolean> {
+    const context: ErrorContext = {
+      operation: 'validate-document-workspace',
+      resourceId: docId,
+    };
+
+    return ErrorUtils.withErrorContext(async () => {
+      try {
+        // Try to access the document with current authentication
+        const response = await NetworkUtils.fetchWithRetry(
+          `https://www.googleapis.com/drive/v3/files/${docId}?fields=id,name,parents&supportsAllDrives=true`,
+          {
+            headers: this.authHeaders,
+          },
+          this.defaultRequestConfig,
+        );
+
+        if (!response.ok) {
+          console.log(`Document ${docId} not accessible in current workspace (status: ${response.status})`);
+          return false;
+        }
+
+        const data = await response.json();
+        console.log(`Document ${docId} ("${data.name}") is accessible in current workspace`);
+        return true;
+      } catch (error) {
+        console.log(`Document ${docId} validation failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    }, context)();
+  }
+
+  /**
+   * Diagnostic method to investigate document parent relationships
+   */
+  async investigateDocumentParents(documentIds: string[]): Promise<void> {
+    console.log(`🔍 DIAGNOSTIC: Investigating parent relationships for ${documentIds.length} documents`);
+    
+    for (const docId of documentIds) {
+      try {
+        const docInfo = await this.getFile(docId);
+        console.log(`📄 Document ${docId} ("${docInfo.name}"):`);
+        console.log(`   Parents: ${JSON.stringify(docInfo.parents || [])}`);
+        console.log(`   Modified: ${docInfo.modifiedTime}`);
+        console.log(`   DriveId: ${docInfo.driveId || 'none'}`);
+        
+        // Try to resolve parent folder names
+        if (docInfo.parents && docInfo.parents.length > 0) {
+          for (const parentId of docInfo.parents) {
+            try {
+              const parentInfo = await this.getFile(parentId);
+              console.log(`   Parent ${parentId}: "${parentInfo.name}" (${parentInfo.mimeType})`);
+            } catch (parentError) {
+              console.log(`   Parent ${parentId}: ❌ Not accessible`);
+            }
+          }
+        }
+        
+      } catch (error) {
+        console.log(`📄 Document ${docId}: ❌ Not accessible - ${error}`);
+      }
+    }
+  }
+
+  /**
    * Detect if the specified folder is in a shared drive
    * Sets sharedDriveId for use in subsequent queries
    */
@@ -140,66 +224,16 @@ export class DriveAPI {
         return trimmed;
       }
 
-      // Treat as folder name - find or create
-      console.log(`Resolving folder name: "${trimmed}"`);
-
-      try {
-        // Search for folder by name in root directory
-        const query = `name='${encodeURIComponent(trimmed)}' and mimeType='application/vnd.google-apps.folder' and trashed=false and 'root' in parents`;
-        const url = this.buildDriveApiUrl({
-          q: query,
-          fields: 'files(id,name)'
-        });
-        const response = await NetworkUtils.fetchWithRetry(
-          url,
-          {
-            headers: this.authHeaders,
-          },
-          this.defaultRequestConfig,
-        );
-
-        const data = await response.json();
-
-        if (data.files && data.files.length > 0) {
-          // Found existing folder(s) - use the first one
-          const folder = data.files[0];
-          const folderId = folder.id;
-          console.log(
-            `Found existing folder "${trimmed}" with ID: ${folderId}${data.files.length > 1 ? ` (${data.files.length} folders with this name, using first one)` : ''}`,
-          );
-          return folderId;
-        }
-
-        // Create new folder in root directory
-        console.log(`Creating new folder: "${trimmed}" in root directory`);
-        const createResponse = await NetworkUtils.fetchWithRetry(
-          'https://www.googleapis.com/drive/v3/files',
-          {
-            method: 'POST',
-            headers: {
-              ...this.authHeaders,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              name: trimmed,
-              mimeType: 'application/vnd.google-apps.folder',
-              parents: ['root'],
-            }),
-          },
-          this.defaultRequestConfig,
-        );
-
-        const newFolder = await createResponse.json();
-        console.log(`Created new folder "${trimmed}" with ID: ${newFolder.id}`);
-        return newFolder.id;
-      } catch (error) {
-        throw new DriveAPIError(
-          `Failed to resolve folder "${trimmed}": ${error instanceof Error ? error.message : String(error)}`,
-          error instanceof Error && 'statusCode' in error ? (error as any).statusCode : undefined,
-          context,
-          error instanceof Error ? error : undefined,
-        );
-      }
+      // Treat as folder name - this should not create folders, only resolve existing IDs
+      console.log(`⚠️ Folder name provided instead of ID: "${trimmed}"`);
+      
+      // resolveFolderId should only accept valid folder IDs, not names
+      // Folder creation should happen via ensureNestedFolders with proper parent context
+      throw new Error(
+        `Invalid folder identifier: "${trimmed}". Expected a Google Drive folder ID (25+ characters), not a folder name. ` +
+        `Folder IDs look like "1TYOD7xWenfVRrwYXqUG2KP9rpp5Juvjn". ` +
+        `If you need to create folders, use ensureNestedFolders() with a proper parent folder ID.`
+      );
     }, context)();
   }
 

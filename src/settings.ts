@@ -213,6 +213,28 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           }),
       );
 
+    containerEl.createEl('h3', { text: 'Cross-Workspace Document Handling' });
+
+    new Setting(containerEl)
+      .setName('Cross-Workspace Documents')
+      .setDesc('How to handle documents that belong to a different Google workspace')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('auto-relink', 'Auto-relink by name (recommended)')
+          .addOption('warn', 'Warn but skip syncing')
+          .addOption('skip', 'Skip silently')
+          .setValue(this.plugin.settings.handleCrossWorkspaceDocs || 'auto-relink')
+          .onChange(async (value: 'auto-relink' | 'warn' | 'skip') => {
+            this.plugin.settings.handleCrossWorkspaceDocs = value;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    const crossWorkspaceDesc = containerEl.createDiv({ cls: 'oauth-description' });
+    crossWorkspaceDesc.createEl('p', { 
+      text: 'When a local file has a google-doc-id from a different Google workspace, this setting controls the behavior. Auto-relink will try to find a document with the same name in the current workspace and update the link. Warn will show warnings but skip the file. Skip will ignore these files silently.'
+    });
+
     // Advanced OAuth Configuration Section (at bottom, collapsed by default)
     const advancedHeader = containerEl.createEl('h3', { text: '▶ Advanced OAuth Configuration' });
     advancedHeader.style.cursor = 'pointer';
@@ -292,6 +314,38 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           text: 'Successfully connected to Google Docs API.',
           cls: 'status-message',
         });
+
+        // Display workspace information if available
+        const workspaceInfo = this.plugin.getWorkspaceInfo();
+        if (workspaceInfo) {
+          const workspaceDiv = this.authStatusDiv.createDiv({ cls: 'workspace-info' });
+          workspaceDiv.createEl('h4', { text: 'Workspace Details', cls: 'workspace-title' });
+          
+          const detailsDiv = workspaceDiv.createDiv({ cls: 'workspace-details' });
+          detailsDiv.createEl('div', { 
+            text: `👤 User: ${workspaceInfo.displayName} (${workspaceInfo.email})`,
+            cls: 'workspace-detail'
+          });
+          detailsDiv.createEl('div', { 
+            text: `🏢 Domain: ${workspaceInfo.domain}`,
+            cls: 'workspace-detail'
+          });
+          detailsDiv.createEl('div', { 
+            text: `🕒 Last Verified: ${workspaceInfo.lastVerified.toLocaleString()}`,
+            cls: 'workspace-detail'
+          });
+          
+          if (workspaceInfo.folderAccess) {
+            detailsDiv.createEl('div', { 
+              text: `📁 Folder: ${workspaceInfo.folderAccess.folderName} (${workspaceInfo.folderAccess.documentCount} docs)`,
+              cls: 'workspace-detail'
+            });
+            detailsDiv.createEl('div', { 
+              text: `🆔 Folder ID: ${workspaceInfo.folderAccess.folderId}`,
+              cls: 'workspace-detail workspace-detail-monospace'
+            });
+          }
+        }
 
         // Add authentication management buttons
         const buttonContainer = this.authStatusDiv.createDiv({ cls: 'auth-button-container modal-button-container' });
