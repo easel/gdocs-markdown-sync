@@ -44,25 +44,28 @@ Components
 **Critical implementation detail**: The Google Drive API uses a "corpora" parameter to determine which drive contexts to search:
 
 - `corpora: "user"` (default) - Only searches "My Drive" and "Shared with me"
-- `corpora: "drive"` - Searches a specific shared drive (requires driveId parameter)  
+- `corpora: "drive"` - Searches a specific shared drive (requires driveId parameter)
 - `corpora: "allDrives"` - Searches all accessible drives (performance impact)
 
 **Problem**: Folders in shared drives return 0 results with default corpora="user"
 
-**Solution**: 
+**Solution**:
+
 1. Detect if folder has driveId (indicates it's in a shared drive)
 2. When driveId exists, use `corpora: "drive"` with the driveId
 3. This ensures queries actually search the correct drive context
 
 **Implementation**: DriveAPI.ts automatically detects and handles both contexts:
+
 - `detectSharedDriveContext()` - Queries folder metadata to get driveId
 - `getQueryParams()` - Builds correct parameters based on drive context
 - `buildDriveApiUrl()` - Constructs API URLs with proper corpora parameters
 
 **Required parameters for shared drives**:
+
 ```
 corpora: 'drive'
-driveId: [detected shared drive ID] 
+driveId: [detected shared drive ID]
 supportsAllDrives: true
 includeItemsFromAllDrives: true
 ```
@@ -153,8 +156,9 @@ Security & Reliability
 Both CLI and Plugin use PKCE (Proof Key for Code Exchange) with Google's OAuth2 endpoint:
 
 **PKCE Generation**:
+
 - **Verifier**: 32 bytes of cryptographically secure random data, base64url encoded
-- **Challenge**: SHA-256 hash of verifier, base64url encoded  
+- **Challenge**: SHA-256 hash of verifier, base64url encoded
 - **CLI**: Uses Node.js `crypto` module (`randomBytes`, `createHash`)
 - **Plugin**: Uses Web Crypto API (`crypto.getRandomValues`, `crypto.subtle.digest`)
 
@@ -163,23 +167,29 @@ Both CLI and Plugin use PKCE (Proof Key for Code Exchange) with Google's OAuth2 
 const array = new Uint8Array(32);
 crypto.getRandomValues(array);
 const codeVerifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
-  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=/g, '');
 
 const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(codeVerifier));
 const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
-  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=/g, '');
 ```
 
 #### Two Authentication Flows
 
 **CLI Flow (Localhost Callback)**:
+
 - Redirect URI: `http://localhost:<random-port>/callback`
 - Process: Starts Express server → Opens browser → Google redirects back → Automatic code capture
 - Implementation: `UnifiedOAuthManager.startNodeAuthFlow()`
 - User Experience: Fully automatic after browser approval
 
 **Plugin Flow (Out-of-Band)**:
-- Redirect URI: `urn:ietf:wg:oauth:2.0:oob` 
+
+- Redirect URI: `urn:ietf:wg:oauth:2.0:oob`
 - Process: Opens browser → User approves → Google shows code → User copies/pastes into plugin
 - Implementation: `plugin-main.ts` `generateAuthUrl()` + `handleAuthCallback()`
 - User Experience: Manual code copy/paste (required due to Obsidian sandbox)
@@ -194,11 +204,12 @@ const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)
 // Security scanner exception: not a leaked secret, this is a public client
 // gitleaks:allow
 const PUBLIC_CLIENT_ID = '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com';
-// gitleaks:allow  
+// gitleaks:allow
 const CLIENT_SECRET = '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';
 ```
 
 **Why This Is Secure**:
+
 - Google's OAuth app configured as "Desktop Application" type
 - PKCE provides code injection protection (the real security)
 - Client secret is public by design (desktop app model)
@@ -262,7 +273,7 @@ const CLIENT_SECRET = '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';
 
 - **Google APIs**: Drive v3 and Docs v1 for document operations
 - **OAuth Implementation**: Custom PKCE flows with dual environment support
-- **YAML Processing**: `gray-matter` for frontmatter parsing with unknown key preservation  
+- **YAML Processing**: `gray-matter` for frontmatter parsing with unknown key preservation
 - **Cryptography**: Node.js crypto (CLI) and Web Crypto API (browser) for PKCE and SHA-256 hashing
 - **HTTP Client**: Native `fetch` with custom retry and timeout wrapper
 
@@ -277,9 +288,9 @@ const CLIENT_SECRET = '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';
 
 Comprehensive test suite in `src/auth/auth.test.ts` covers:
 
-- **PKCE Generation Tests**: 
+- **PKCE Generation Tests**:
   - Verifier generation (32-byte cryptographically secure, base64url encoded)
-  - Challenge generation (SHA-256 hash of verifier, base64url encoded)  
+  - Challenge generation (SHA-256 hash of verifier, base64url encoded)
   - Entropy validation (different verifiers on each generation)
   - Format validation (no padding, proper character set)
 

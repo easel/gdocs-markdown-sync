@@ -98,7 +98,7 @@ describe('Authentication System', () => {
 
       const verifier1 = generateVerifier();
       const verifier2 = generateVerifier();
-      
+
       expect(verifier1).not.toBe(verifier2);
     });
   });
@@ -113,7 +113,8 @@ describe('Authentication System', () => {
         client_id: clientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
+        scope:
+          'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
         access_type: 'offline',
         prompt: 'consent',
         code_challenge: codeChallenge,
@@ -141,7 +142,8 @@ describe('Authentication System', () => {
         client_id: clientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
+        scope:
+          'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
         access_type: 'offline',
         prompt: 'consent',
         code_challenge: codeChallenge,
@@ -161,15 +163,18 @@ describe('Authentication System', () => {
     it('should properly encode special characters in URL parameters', () => {
       const params = new URLSearchParams({
         redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
-        scope: 'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
+        scope:
+          'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file',
       });
 
       const queryString = params.toString();
-      
+
       // Colons should be encoded in redirect_uri
       expect(queryString).toContain('redirect_uri=urn%3Aietf%3Awg%3Aoauth%3A2.0%3Aoob');
       // Spaces should be encoded as + in scope
-      expect(queryString).toContain('scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file');
+      expect(queryString).toContain(
+        'scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file',
+      );
     });
   });
 
@@ -213,7 +218,8 @@ describe('Authentication System', () => {
     it('should handle token exchange error responses', () => {
       const mockErrorResponse = {
         error: 'invalid_grant',
-        error_description: 'The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client.',
+        error_description:
+          'The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client.',
       };
 
       expect(mockErrorResponse.error).toBe('invalid_grant');

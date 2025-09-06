@@ -102,8 +102,8 @@ describe('DriveAPI', () => {
       expect(typeof driveAPI.listDocsInFolder).toBe('function');
       expect(typeof driveAPI.getFile).toBe('function');
       expect(typeof driveAPI.createFolder).toBe('function');
-      expect(typeof driveAPI.exportDocMarkdown).toBe('function');
-      expect(typeof driveAPI.updateDocMarkdown).toBe('function');
+      expect(typeof driveAPI.exportDocAsMarkdown).toBe('function');
+      expect(typeof driveAPI.updateDocument).toBe('function');
       expect(typeof driveAPI.uploadMarkdownAsDoc).toBe('function');
       expect(typeof driveAPI.setAppProperties).toBe('function');
       expect(typeof driveAPI.getAppProperties).toBe('function');

@@ -17,6 +17,12 @@ export interface GoogleDocsSyncSettings {
   showDeletionWarnings?: boolean; // Show warnings for delete operations (default: true)
   // Cross-workspace document handling
   handleCrossWorkspaceDocs?: 'auto-relink' | 'warn' | 'skip'; // How to handle docs from different workspaces (default: 'auto-relink')
+  // Google Sheets settings
+  syncSheets?: boolean; // Enable Google Sheets sync (default: false)
+  sheetStorageFormat?: 'auto' | 'markdown' | 'csv' | 'csvy' | 'base'; // How to store sheets locally (default: 'auto')
+  maxSheetRowsForMarkdown?: number; // Max rows for markdown table format (default: 50)
+  maxSheetRowsForCSVY?: number; // Max rows for CSVY format (default: 500)
+  preserveSheetFormulas?: boolean; // Preserve formulas on Google Sheets (default: true)
 }
 
 export interface GoogleDocsSyncPluginData {

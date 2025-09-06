@@ -20,7 +20,8 @@ TypeScript codebase implementing bidirectional Google Docs ↔ Markdown synchron
 
 ```bash
 bun install                    # Install dependencies
-bun run build                  # Build both CLI and plugin
+bun run build                  # Safe build: check + build + verify (DEFAULT - RECOMMENDED)
+bun run build:unsafe           # Build without checks (use only when debugging build issues)
 bun run check                  # Run typecheck, lint, tests, format check (REQUIRED after changes)
 bun run format                 # Auto-fix code formatting (required for CI)
 bun run lint:fix              # Fix linting issues (import order, unused vars, etc.)
@@ -50,10 +51,13 @@ bun run test:integration      # Integration tests (requires auth)
 **IMPORTANT: Plugin directory name is `google-docs-sync` (from manifest.json ID)**
 
 ```bash
-# Deploy to synaptiq_ops vault (builds plugin first)
+# Deploy to synaptiq_ops vault (includes automatic typecheck validation)
 bun run deploy:synaptiq
 # OR
 make deploy-synaptiq
+
+# Build is safe by default - no need for additional checks
+bun run build && bun run deploy:synaptiq
 
 # Build and package plugin for distribution
 bun run package:plugin
@@ -67,31 +71,19 @@ bun run build:plugin
 
 ### Build System
 
-- `bun run build` - Builds **both** CLI and plugin (ensures consistency)
-- `bun run build:cli` - CLI only 
-- `bun run build:plugin` - Plugin only
+- `bun run build` - **SAFE BUILD**: Full quality checks + CLI + plugin + verification (DEFAULT)
+- `bun run build:unsafe` - Direct build without safety checks (debugging only)
+- `bun run build:cli` - CLI only (no safety checks)
+- `bun run build:plugin` - Plugin only (no safety checks)
 - Deployment always shows version being deployed and verifies after copy
 
 ### Troubleshooting Builds
 
 If you see version mismatches:
-1. Run `bun run build` (builds both targets)
-2. Run `bun run verify-build` to check build status
-3. Check `dist/manifest.json` has correct version
-4. Deploy with `bun run deploy:synaptiq` for automatic verification
 
-### Build Verification
-
-```bash
-bun run verify-build    # Check if builds are current and complete
-make verify-build       # Same via Makefile
-```
-
-This checks:
-- All required files exist in `dist/`
-- File sizes are reasonable
-- Build timestamp (warns if >10 minutes old)
-- Shows version being built
+1. Run `bun run build` (safe build with all checks)
+2. Check `dist/manifest.json` has correct version
+3. Deploy with `bun run deploy:synaptiq` for automatic verification
 
 ## CLI Interface
 
@@ -134,6 +126,43 @@ src/
 ```
 
 ## Development Guidelines
+
+### AI Agent Best Practices
+
+#### Parallel Execution Strategy
+
+**CRITICAL**: Always use parallel subagents when fixing multiple independent issues or performing multiple searches to maximize performance.
+
+```
+❌ BAD: Sequential fixes (slow)
+- Fix error A, wait for completion
+- Fix error B, wait for completion
+- Fix error C, wait for completion
+
+✅ GOOD: Parallel fixes (fast)
+- Launch 3 subagents simultaneously:
+  - Agent 1: Fix error A
+  - Agent 2: Fix error B
+  - Agent 3: Fix error C
+```
+
+**When to use parallel subagents:**
+
+- Fixing multiple TypeScript errors across different files
+- Searching for multiple patterns or concepts
+- Implementing multiple independent features
+- Running multiple test suites
+- Analyzing different parts of the codebase
+
+**Example parallel task distribution:**
+
+```
+TypeScript errors to fix:
+- Auth module errors → Subagent 1
+- Drive API errors → Subagent 2
+- Plugin UI errors → Subagent 3
+- Type definition errors → Subagent 4
+```
 
 ### Code Quality
 
@@ -249,6 +278,137 @@ src/
 - **Context preservation**: Include operation details, resource IDs, file paths
 - **Error aggregation**: Collect multiple errors for batch operations
 - **User-friendly messages**: Clear, actionable error descriptions
+
+## Type Safety and Build Quality
+
+### Zero-Tolerance TypeScript Policy
+
+**CRITICAL**: With TypeScript available, there is NO excuse for deploying code with missing methods or type errors that could be caught at compile time.
+
+#### Mandatory Pre-Build Checks
+
+Before any deployment, ALL of these must pass without errors:
+
+```bash
+bun run typecheck    # TypeScript compilation check (MUST be error-free)
+bun run lint         # Code quality and import order
+bun run test         # Unit and integration tests
+bun run format:check # Code formatting consistency
+```
+
+Or use the consolidated command:
+
+```bash
+bun run check        # Runs all checks above
+```
+
+#### Build Pipeline Safeguards
+
+1. **Type checking in prebuild**: Build scripts MUST run TypeScript validation
+2. **Deploy verification**: Never deploy without running type check first
+3. **Error visibility**: TypeScript errors are treated as build failures, not warnings
+
+#### Case Study: Missing Method Runtime Error
+
+**The Problem**:
+
+- Runtime error: `this.authManager.getTokenStorage is not a function`
+- Location: `plugin-main.ts:329`
+- Root cause: `PluginAuthManager` class missing `getTokenStorage()` method
+
+**What TypeScript Caught**:
+
+```bash
+$ bun run typecheck
+src/plugin-main.ts(329,43): error TS2339: Property 'getTokenStorage' does not exist on type 'PluginAuthManager'.
+```
+
+**The Gap**: Build process didn't enforce TypeScript checking, allowing a compile-time error to become a runtime failure.
+
+#### Type Safety Requirements
+
+1. **Explicit interfaces**: Define clear contracts between modules
+
+   ```typescript
+   interface TokenStorage {
+     getTokens(): Credentials | null;
+     save(credentials: Credentials): Promise<void>;
+     clear(): Promise<void>;
+   }
+   ```
+
+2. **Public method signatures**: All public methods MUST have explicit return types
+
+   ```typescript
+   // ❌ Bad - implicit return type
+   getTokenStorage() {
+     return this.tokenStorage;
+   }
+
+   // ✅ Good - explicit return type
+   getTokenStorage(): TokenStorage {
+     return this.tokenStorage;
+   }
+   ```
+
+3. **Cross-module boundaries**: Use interfaces to define contracts
+   ```typescript
+   // Define what the auth manager must provide
+   interface AuthManager {
+     getTokenStorage(): TokenStorage;
+     isAuthenticated(): boolean;
+     getAuthClient(): Promise<any>;
+   }
+   ```
+
+#### Testing for Type Safety
+
+1. **Unit tests for all public APIs**: Every public method must have tests
+2. **Type contract tests**: Verify interfaces match between modules
+3. **Integration tests for critical paths**: Test the full authentication flow
+4. **Mock validation**: Ensure mocks match real implementations
+
+#### Forbidden Practices
+
+- **Never use `// @ts-ignore`** without explicit code review approval
+- **Never deploy with TypeScript errors** - fix them, don't suppress them
+- **Never bypass type checking** in build scripts
+- **Never commit code** that fails `bun run check`
+
+#### Enhanced Build Scripts
+
+The build process now MUST include:
+
+1. **Pre-build validation**: Type check before any compilation
+2. **Build verification**: Ensure all outputs are type-safe
+3. **Pre-deploy checks**: Final validation before deployment
+
+#### Developer Workflow
+
+```bash
+# Before starting work
+bun run check                    # Ensure clean starting state
+
+# During development
+bun run typecheck               # Frequent type checking
+bun run test                    # Run tests for changed code
+
+# Before committing
+bun run check                   # All checks must pass
+bun run build                   # Safe build with full verification (RECOMMENDED)
+
+# Before deploying
+bun run deploy:synaptiq         # Deploy with automatic typecheck validation
+```
+
+#### Recovery Protocol
+
+When encountering TypeScript errors:
+
+1. **Fix immediately**: Don't work around, fix the root cause
+2. **Update tests**: Ensure tests cover the fixed functionality
+3. **Verify comprehensively**: Run full check suite
+4. **Document if needed**: Add to this guide if it reveals a pattern
 
 ## Authentication Flow
 

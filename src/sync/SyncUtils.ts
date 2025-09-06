@@ -2,8 +2,6 @@
  * Shared sync utilities for both CLI and plugin
  */
 
-import { computeSHA256 as sharedComputeSHA256 } from '../fs/frontmatter';
-
 export interface FrontMatter {
   [key: string]: any;
   'google-doc-id'?: string;
@@ -40,13 +38,13 @@ export class SyncUtils {
     const matter = require('gray-matter');
     try {
       const result = matter(content);
-      return { 
-        frontmatter: result.data || {}, 
-        markdown: result.content || content 
+      return {
+        frontmatter: result.data || {},
+        markdown: result.content || content,
       };
     } catch (error) {
       console.error('Failed to parse frontmatter with gray-matter, using fallback:', error);
-      
+
       // Fallback to simple parsing only if gray-matter fails
       const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
       const match = content.match(frontmatterRegex);
@@ -98,15 +96,18 @@ export class SyncUtils {
     try {
       const yamlString = yaml.dump(frontmatter, {
         lineWidth: -1, // Don't wrap long lines
-        noRefs: true,  // Don't use references
+        noRefs: true, // Don't use references
         quotingType: '"', // Use double quotes only when necessary
         forceQuotes: false, // Only quote when necessary
       });
-      
+
       return `---\n${yamlString}---\n\n${content}`;
     } catch (error) {
-      console.error('Failed to serialize frontmatter with js-yaml, falling back to simple serialization:', error);
-      
+      console.error(
+        'Failed to serialize frontmatter with js-yaml, falling back to simple serialization:',
+        error,
+      );
+
       // Fallback to simple serialization
       const yamlLines = ['---'];
       for (const [key, value] of Object.entries(frontmatter)) {
@@ -115,7 +116,7 @@ export class SyncUtils {
         }
       }
       yamlLines.push('---', '');
-      
+
       return yamlLines.join('\n') + content;
     }
   }
@@ -129,15 +130,6 @@ export class SyncUtils {
       .replace(/[\\/:*?"<>|]/g, '-')
       .replace(/\s+/g, ' ')
       .trim();
-  }
-
-  /**
-   * Compute SHA256 hash of content
-   * @deprecated Use computeSHA256 from src/fs/frontmatter.ts instead
-   */
-  static async computeSHA256(content: string): Promise<string> {
-    // Use shared implementation from frontmatter module
-    return sharedComputeSHA256(content);
   }
 
   /**

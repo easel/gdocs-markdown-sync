@@ -47,7 +47,7 @@ export class PluginAuthManager {
   private tokenLoader: BrowserTokenLoader;
   private pluginTokenStorage: ObsidianTokenStorage | null = null;
   private currentCredentials: Credentials | null = null;
-  private profile: string;
+  public profile: string;
 
   constructor(profile?: string, plugin?: any) {
     this.profile = profile || 'default';
@@ -56,6 +56,13 @@ export class PluginAuthManager {
     if (plugin) {
       this.pluginTokenStorage = new ObsidianTokenStorage(plugin, this.profile);
     }
+  }
+
+  /**
+   * Gets the appropriate token storage instance
+   */
+  getTokenStorage(): ObsidianTokenStorage | null {
+    return this.pluginTokenStorage;
   }
 
   /**
@@ -153,9 +160,7 @@ export class PluginAuthManager {
         return {
           isAuthenticated: false,
           error: 'No authentication credentials found',
-          suggestions: [
-            'Use the "Start Authentication" button in plugin settings',
-          ],
+          suggestions: ['Use the "Start Authentication" button in plugin settings'],
           nextSteps: [
             'Click "Start Authentication" to authenticate with Google',
             'Complete the browser authentication process',
@@ -223,7 +228,7 @@ export class PluginAuthManager {
   async startAuthFlow(): Promise<never> {
     throw new Error(
       'Authentication flow should be started via plugin settings UI. ' +
-      'Click "Start Authentication" button in the plugin settings panel.',
+        'Click "Start Authentication" button in the plugin settings panel.',
     );
   }
 
@@ -262,18 +267,21 @@ export class PluginAuthManager {
       throw new Error('No refresh token available for token refresh');
     }
 
-    // We need OAuth client settings for refresh - get them from plugin settings 
+    // We need OAuth client settings for refresh - get them from plugin settings
     // This is a bit of a hack, but we need to access the plugin's OAuth settings
-    const oauthManager = new UnifiedOAuthManager();
-    
+    if (!this.pluginTokenStorage) {
+      throw new Error('Plugin token storage not available for token refresh');
+    }
+    const oauthManager = new UnifiedOAuthManager(this.pluginTokenStorage, { isPlugin: true });
+
     try {
       const refreshedCredentials = await oauthManager.refreshTokens(credentials);
-      
+
       // Save the refreshed credentials
       if (this.pluginTokenStorage) {
         await this.pluginTokenStorage.save(refreshedCredentials);
       }
-      
+
       return refreshedCredentials;
     } catch (error) {
       throw new Error(`Token refresh failed: ${(error as Error).message}`);

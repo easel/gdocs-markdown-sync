@@ -146,18 +146,21 @@ Key Use Cases & User Stories
 ### Authentication & Security
 
 #### CLI Authentication Flow (Desktop with localhost callback)
+
 - **User Experience**: Run `gdocs-markdown-sync auth` → browser opens automatically → approve access → automatic token capture → "Authentication successful!"
 - **Technical Implementation**: PKCE OAuth with local Express server on random port (`http://localhost:<port>/callback`)
 - **Token Storage**: Filesystem at `~/.config/gdocs-markdown-sync/tokens-<profile>.json`
 - **User Interaction**: Fully automatic after initial browser approval
 
 #### Plugin Authentication Flow (Manual code entry)
+
 - **User Experience**: Click "Start Authentication" in settings → browser opens → approve access → copy authorization code from Google → paste into plugin modal → "Authentication successful!"
 - **Technical Implementation**: PKCE OAuth with out-of-band redirect (`urn:ietf:wg:oauth:2.0:oob`)
 - **Token Storage**: Obsidian plugin data store (isolated per profile)
 - **User Interaction**: Manual copy/paste of authorization code (required due to Obsidian sandbox restrictions)
 
 #### Common Security Features
+
 - **PKCE Protection**: Both flows use Proof Key for Code Exchange for enhanced security
 - **Public Client Model**: Uses Google's public OAuth client with intentionally committed credentials
 - **Profile Support**: Multiple account isolation via named profiles
@@ -233,7 +236,7 @@ Future
 ### Advanced Synchronization Features
 
 - **Robust 3-way merge and diff UX**: Visual conflict resolution interface with intelligent merge suggestions
-- **Selective sync**: Allow users to choose specific documents or folders within Drive folder for targeted sync operations  
+- **Selective sync**: Allow users to choose specific documents or folders within Drive folder for targeted sync operations
 - **Drive changes API integration**: Real-time sync using Drive's change notifications instead of polling for lower latency and better efficiency
 - **Batch operation optimization**: Concurrent processing of multiple document operations with progress tracking
 

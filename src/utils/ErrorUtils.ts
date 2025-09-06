@@ -9,6 +9,7 @@ export interface ErrorContext {
   filePath?: string;
   correlationId?: string;
   timestamp?: Date;
+  targetLocation?: string;
   metadata?: Record<string, any>;
 }
 

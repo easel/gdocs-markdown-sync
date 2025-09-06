@@ -35,6 +35,14 @@ export class BrowserTokenLoader {
   }
 
   /**
+   * Get tokens (plugin cannot access CLI tokens)
+   */
+  getTokens(): Credentials | null {
+    // Browser/plugin context cannot access filesystem tokens
+    return null;
+  }
+
+  /**
    * Checks if tokens are expired
    */
   isTokenExpired(credentials: Credentials): boolean {

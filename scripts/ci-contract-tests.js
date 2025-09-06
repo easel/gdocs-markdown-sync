@@ -14,7 +14,7 @@ const COLORS = {
   YELLOW: '\x1b[33m',
   BLUE: '\x1b[34m',
   RESET: '\x1b[0m',
-  BOLD: '\x1b[1m'
+  BOLD: '\x1b[1m',
 };
 
 function log(message, color = COLORS.RESET) {
@@ -24,21 +24,21 @@ function log(message, color = COLORS.RESET) {
 function runCommand(command, description) {
   log(`\n${COLORS.BLUE}📋 ${description}${COLORS.RESET}`);
   log(`   Command: ${command}`);
-  
+
   try {
-    const output = execSync(command, { 
-      encoding: 'utf-8', 
-      stdio: ['inherit', 'pipe', 'pipe'] 
+    const output = execSync(command, {
+      encoding: 'utf-8',
+      stdio: ['inherit', 'pipe', 'pipe'],
     });
-    
+
     log(`${COLORS.GREEN}✅ ${description} passed${COLORS.RESET}`);
-    
+
     // Log output if it contains warnings or important info
     if (output.includes('⚠️') || output.includes('🚨') || output.includes('💡')) {
       log('\n📊 Important output:');
       console.log(output);
     }
-    
+
     return { success: true, output };
   } catch (error) {
     log(`${COLORS.RED}❌ ${description} failed${COLORS.RESET}`);
@@ -54,44 +54,48 @@ async function main() {
   const results = [];
 
   // 1. API Contract Tests
-  results.push(runCommand(
-    'bun test src/tests/api-contract.test.ts --reporter=tap',
-    'API Contract Validation'
-  ));
+  results.push(
+    runCommand('bun test src/tests/api-contract.test.ts --reporter=tap', 'API Contract Validation'),
+  );
 
   // 2. Plugin Workflow Tests
-  results.push(runCommand(
-    'bun test src/tests/plugin-workflows.test.ts --reporter=tap',
-    'Plugin Workflow Integration'
-  ));
+  results.push(
+    runCommand(
+      'bun test src/tests/plugin-workflows.test.ts --reporter=tap',
+      'Plugin Workflow Integration',
+    ),
+  );
 
   // 3. API Gap Detection
-  results.push(runCommand(
-    'bun test src/tests/api-gap-detector.test.ts --reporter=tap',
-    'Automated Gap Detection'
-  ));
+  results.push(
+    runCommand(
+      'bun test src/tests/api-gap-detector.test.ts --reporter=tap',
+      'Automated Gap Detection',
+    ),
+  );
 
   // 4. Mock vs Real API Tests
-  results.push(runCommand(
-    'bun test src/tests/mock-vs-real.test.ts --reporter=tap',
-    'Mock vs Real API Consistency'
-  ));
+  results.push(
+    runCommand(
+      'bun test src/tests/mock-vs-real.test.ts --reporter=tap',
+      'Mock vs Real API Consistency',
+    ),
+  );
 
   // 5. Type Contract Tests
-  results.push(runCommand(
-    'bun test src/tests/type-contracts.test.ts --reporter=tap',
-    'TypeScript Contract Validation'
-  ));
+  results.push(
+    runCommand(
+      'bun test src/tests/type-contracts.test.ts --reporter=tap',
+      'TypeScript Contract Validation',
+    ),
+  );
 
   // 6. Build Plugin to Catch Compilation Issues
-  results.push(runCommand(
-    'bun run build:plugin',
-    'Plugin Build Verification'
-  ));
+  results.push(runCommand('bun run build:plugin', 'Plugin Build Verification'));
 
   // Summary
-  const passed = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
+  const passed = results.filter((r) => r.success).length;
+  const failed = results.filter((r) => !r.success).length;
 
   log('\n' + '='.repeat(60));
   log(`${COLORS.BOLD}📊 CONTRACT TESTING SUMMARY${COLORS.RESET}`);
@@ -111,10 +115,10 @@ async function main() {
     passed,
     failed,
     total: results.length,
-    results: results.map(r => ({
+    results: results.map((r) => ({
       success: r.success,
-      error: r.error || null
-    }))
+      error: r.error || null,
+    })),
   };
 
   // Write CI results for other tools
@@ -127,7 +131,7 @@ async function main() {
 
 // Run if called directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(error => {
+  main().catch((error) => {
     log(`${COLORS.RED}💥 Contract testing failed: ${error.message}${COLORS.RESET}`);
     process.exit(1);
   });

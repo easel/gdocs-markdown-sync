@@ -2,8 +2,11 @@
  * Tests for Last Write Wins conflict resolution policy
  */
 
-import { ConflictResolver, SyncState } from './ConflictResolver';
+import { describe, it, expect, beforeEach } from 'bun:test';
+
 import { GoogleDocsSyncSettings } from '../types';
+
+import { ConflictResolver, SyncState } from './ConflictResolver';
 
 describe('Last Write Wins Conflict Resolution', () => {
   let resolver: ConflictResolver;

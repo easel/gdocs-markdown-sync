@@ -24,9 +24,9 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     const headerEl = containerEl.createEl('div', { cls: 'google-docs-sync-header' });
     const titleContainer = headerEl.createEl('div', { cls: 'google-docs-sync-title-container' });
     titleContainer.createEl('h2', { text: 'Google Docs Sync Settings' });
-    const versionEl = titleContainer.createEl('span', { 
+    titleContainer.createEl('span', {
       cls: 'google-docs-sync-version',
-      text: getBuildVersion()
+      text: getBuildVersion(),
     });
 
     // Authentication Status & Controls (consolidated at top)
@@ -162,12 +162,10 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       .setName('Sync Moves')
       .setDesc('Automatically sync file moves between vault and Google Drive')
       .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.syncMoves === true)
-          .onChange(async (value) => {
-            this.plugin.settings.syncMoves = value;
-            await this.plugin.saveSettings();
-          }),
+        toggle.setValue(this.plugin.settings.syncMoves === true).onChange(async (value) => {
+          this.plugin.settings.syncMoves = value;
+          await this.plugin.saveSettings();
+        }),
       );
 
     new Setting(containerEl)
@@ -179,8 +177,8 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           .addOption('ignore', 'Ignore (Do nothing)')
           .addOption('sync', 'Sync (Dangerous - delete on both sides)')
           .setValue(this.plugin.settings.deleteHandling || 'archive')
-          .onChange(async (value: 'archive' | 'ignore' | 'sync') => {
-            this.plugin.settings.deleteHandling = value;
+          .onChange(async (value) => {
+            this.plugin.settings.deleteHandling = value as 'archive' | 'ignore' | 'sync';
             await this.plugin.saveSettings();
           }),
       );
@@ -224,28 +222,98 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
           .addOption('warn', 'Warn but skip syncing')
           .addOption('skip', 'Skip silently')
           .setValue(this.plugin.settings.handleCrossWorkspaceDocs || 'auto-relink')
-          .onChange(async (value: 'auto-relink' | 'warn' | 'skip') => {
-            this.plugin.settings.handleCrossWorkspaceDocs = value;
+          .onChange(async (value) => {
+            this.plugin.settings.handleCrossWorkspaceDocs = value as
+              | 'auto-relink'
+              | 'warn'
+              | 'skip';
             await this.plugin.saveSettings();
           }),
       );
 
     const crossWorkspaceDesc = containerEl.createDiv({ cls: 'oauth-description' });
-    crossWorkspaceDesc.createEl('p', { 
-      text: 'When a local file has a google-doc-id from a different Google workspace, this setting controls the behavior. Auto-relink will try to find a document with the same name in the current workspace and update the link. Warn will show warnings but skip the file. Skip will ignore these files silently.'
+    crossWorkspaceDesc.createEl('p', {
+      text: 'When a local file has a google-doc-id from a different Google workspace, this setting controls the behavior. Auto-relink will try to find a document with the same name in the current workspace and update the link. Warn will show warnings but skip the file. Skip will ignore these files silently.',
     });
+
+    // Google Sheets Configuration
+    containerEl.createEl('h3', { text: 'Google Sheets Integration' });
+
+    new Setting(containerEl)
+      .setName('Enable Google Sheets Sync')
+      .setDesc('Include Google Sheets in sync operations (experimental)')
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.syncSheets === true).onChange(async (value) => {
+          this.plugin.settings.syncSheets = value;
+          await this.plugin.saveSettings();
+          this.display(); // Refresh to show/hide advanced sheet settings
+        }),
+      );
+
+    // Show advanced sheet settings only if sheets sync is enabled
+    if (this.plugin.settings.syncSheets) {
+      new Setting(containerEl)
+        .setName('Sheet Storage Format')
+        .setDesc('How to store Google Sheets locally')
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption('auto', 'Auto (recommended)')
+            .addOption('markdown', 'Markdown Tables')
+            .addOption('csvy', 'CSV with YAML metadata')
+            .addOption('csv', 'CSV files')
+            .addOption('base', 'Obsidian Bases')
+            .setValue(this.plugin.settings.sheetStorageFormat || 'auto')
+            .onChange(async (value) => {
+              this.plugin.settings.sheetStorageFormat = value as any;
+              await this.plugin.saveSettings();
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName('Max Rows for Markdown Tables')
+        .setDesc('Sheets larger than this will use CSV format')
+        .addText((text) =>
+          text
+            .setPlaceholder('50')
+            .setValue((this.plugin.settings.maxSheetRowsForMarkdown || 50).toString())
+            .onChange(async (value) => {
+              const num = parseInt(value, 10);
+              if (!isNaN(num) && num > 0) {
+                this.plugin.settings.maxSheetRowsForMarkdown = num;
+                await this.plugin.saveSettings();
+              }
+            }),
+        );
+
+      new Setting(containerEl)
+        .setName('Preserve Formulas')
+        .setDesc('Keep formulas on Google Sheets (recommended - only sync values)')
+        .addToggle((toggle) =>
+          toggle
+            .setValue(this.plugin.settings.preserveSheetFormulas !== false)
+            .onChange(async (value) => {
+              this.plugin.settings.preserveSheetFormulas = value;
+              await this.plugin.saveSettings();
+            }),
+        );
+
+      const sheetsDesc = containerEl.createDiv({ cls: 'oauth-description' });
+      sheetsDesc.createEl('p', {
+        text: '⚠️ Google Sheets integration is experimental. Formulas are preserved on Google Sheets but only computed values are synced to Obsidian. Large sheets may take longer to sync.',
+      });
+    }
 
     // Advanced OAuth Configuration Section (at bottom, collapsed by default)
     const advancedHeader = containerEl.createEl('h3', { text: '▶ Advanced OAuth Configuration' });
     advancedHeader.style.cursor = 'pointer';
     advancedHeader.style.userSelect = 'none';
-    
+
     const advancedContent = containerEl.createDiv();
     advancedContent.style.display = 'none';
-    
+
     const oauthDescription = advancedContent.createDiv({ cls: 'oauth-description' });
-    oauthDescription.createEl('p', { 
-      text: 'Default OAuth credentials are provided. Only modify these if you want to use your own Google Cloud OAuth client.'
+    oauthDescription.createEl('p', {
+      text: 'Default OAuth credentials are provided. Only modify these if you want to use your own Google Cloud OAuth client.',
     });
 
     new Setting(advancedContent)
@@ -278,7 +346,9 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     advancedHeader.addEventListener('click', () => {
       const isHidden = advancedContent.style.display === 'none';
       advancedContent.style.display = isHidden ? 'block' : 'none';
-      advancedHeader.textContent = isHidden ? '▼ Advanced OAuth Configuration' : '▶ Advanced OAuth Configuration';
+      advancedHeader.textContent = isHidden
+        ? '▼ Advanced OAuth Configuration'
+        : '▶ Advanced OAuth Configuration';
     });
   }
 
@@ -320,36 +390,38 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
         if (workspaceInfo) {
           const workspaceDiv = this.authStatusDiv.createDiv({ cls: 'workspace-info' });
           workspaceDiv.createEl('h4', { text: 'Workspace Details', cls: 'workspace-title' });
-          
+
           const detailsDiv = workspaceDiv.createDiv({ cls: 'workspace-details' });
-          detailsDiv.createEl('div', { 
+          detailsDiv.createEl('div', {
             text: `👤 User: ${workspaceInfo.displayName} (${workspaceInfo.email})`,
-            cls: 'workspace-detail'
+            cls: 'workspace-detail',
           });
-          detailsDiv.createEl('div', { 
+          detailsDiv.createEl('div', {
             text: `🏢 Domain: ${workspaceInfo.domain}`,
-            cls: 'workspace-detail'
+            cls: 'workspace-detail',
           });
-          detailsDiv.createEl('div', { 
+          detailsDiv.createEl('div', {
             text: `🕒 Last Verified: ${workspaceInfo.lastVerified.toLocaleString()}`,
-            cls: 'workspace-detail'
+            cls: 'workspace-detail',
           });
-          
+
           if (workspaceInfo.folderAccess) {
-            detailsDiv.createEl('div', { 
+            detailsDiv.createEl('div', {
               text: `📁 Folder: ${workspaceInfo.folderAccess.folderName} (${workspaceInfo.folderAccess.documentCount} docs)`,
-              cls: 'workspace-detail'
+              cls: 'workspace-detail',
             });
-            detailsDiv.createEl('div', { 
+            detailsDiv.createEl('div', {
               text: `🆔 Folder ID: ${workspaceInfo.folderAccess.folderId}`,
-              cls: 'workspace-detail workspace-detail-monospace'
+              cls: 'workspace-detail workspace-detail-monospace',
             });
           }
         }
 
         // Add authentication management buttons
-        const buttonContainer = this.authStatusDiv.createDiv({ cls: 'auth-button-container modal-button-container' });
-        
+        const buttonContainer = this.authStatusDiv.createDiv({
+          cls: 'auth-button-container modal-button-container',
+        });
+
         const clearButton = buttonContainer.createEl('button', {
           text: 'Clear Authentication',
           cls: 'auth-button clear',
@@ -401,7 +473,9 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
         }
 
         // Add start authentication button
-        const buttonContainer = this.authStatusDiv.createDiv({ cls: 'auth-button-container modal-button-container' });
+        const buttonContainer = this.authStatusDiv.createDiv({
+          cls: 'auth-button-container modal-button-container',
+        });
         const authButton = buttonContainer.createEl('button', {
           text: 'Start Authentication',
           cls: 'auth-button start mod-cta',
@@ -504,7 +578,6 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
             await this.updateAuthStatus();
           }
         };
-
       }
     } catch (error) {
       this.authButton.createEl('div', {
@@ -585,31 +658,32 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
     manualSection.createEl('h4', { text: 'Manual Sync', cls: 'sync-section-title' });
 
     const manualStatus = manualSection.createDiv({ cls: 'sync-status-main' });
-    
+
     // Access manual sync status from plugin
     const plugin = this.plugin as any;
     if (plugin.syncInProgress && plugin.currentSyncStatus) {
       const syncStatus = plugin.currentSyncStatus;
       const progress = syncStatus.progress;
-      const percentComplete = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
-      
+      const percentComplete =
+        progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+
       manualStatus.createSpan({
         text: `🔄 ${syncStatus.operation}`,
         cls: 'sync-status-syncing',
       });
 
       const progressDetails = manualSection.createDiv({ cls: 'sync-status-details' });
-      progressDetails.createSpan({ 
+      progressDetails.createSpan({
         text: `Progress: ${progress.current}/${progress.total} files (${percentComplete}%)`,
-        cls: 'sync-status-detail-text' 
+        cls: 'sync-status-detail-text',
       });
 
       if (syncStatus.startTime > 0) {
         const elapsed = Math.round((Date.now() - syncStatus.startTime) / 1000);
         const elapsedDetails = manualSection.createDiv({ cls: 'sync-status-details' });
-        elapsedDetails.createSpan({ 
+        elapsedDetails.createSpan({
           text: `Running for ${elapsed}s`,
-          cls: 'sync-status-detail-text' 
+          cls: 'sync-status-detail-text',
         });
       }
 
@@ -630,9 +704,9 @@ export class GoogleDocsSyncSettingsTab extends PluginSettingTab {
       });
 
       const idleDetails = manualSection.createDiv({ cls: 'sync-status-details' });
-      idleDetails.createSpan({ 
+      idleDetails.createSpan({
         text: 'Click "Sync Now" to start a manual sync operation',
-        cls: 'sync-status-detail-text' 
+        cls: 'sync-status-detail-text',
       });
     }
   }

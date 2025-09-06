@@ -47,7 +47,11 @@
       "Bash(osascript:*)",
       "Bash(RUN_INTEGRATION_TESTS=true bun test src/folder-sync.integration.test.ts --grep \"document parent folder consistency\")",
       "WebFetch(domain:fleker.medium.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(sed:*)",
+      "Bash(timeout 10s bun test:*)",
+      "Bash(npm run lint)",
+      "Bash(npx prettier:*)"
     ],
     "deny": [],
     "ask": [],

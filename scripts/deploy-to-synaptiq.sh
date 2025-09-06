@@ -8,6 +8,15 @@ DIST_DIR="./dist"
 
 echo "🚀 Deploying Google Docs Sync plugin to synaptiq_ops vault..."
 
+# CRITICAL: Verify TypeScript safety before deployment
+echo "🔧 Pre-deployment TypeScript validation..."
+if ! bun run typecheck; then
+    echo "❌ DEPLOYMENT BLOCKED: TypeScript validation failed."
+    echo "🛑 Fix all TypeScript errors before deploying to prevent runtime failures."
+    exit 1
+fi
+echo "✅ TypeScript validation passed - safe to deploy"
+
 # Show version being deployed
 if [ -f "$DIST_DIR/manifest.json" ]; then
   DEPLOY_VERSION=$(grep '"version"' "$DIST_DIR/manifest.json" | sed 's/.*"version": *"\([^"]*\)".*/\1/')

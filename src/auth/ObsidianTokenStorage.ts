@@ -17,6 +17,15 @@ export class ObsidianTokenStorage implements TokenStorage {
     return `auth_tokens_${this.profile}`;
   }
 
+  /**
+   * Get tokens synchronously (for compatibility)
+   */
+  getTokens(): Credentials | null {
+    // For synchronous access, we cannot use async load()
+    // Return null to indicate async loading is required
+    return null;
+  }
+
   async load(): Promise<Credentials | null> {
     try {
       const data = await this.plugin.loadData();
@@ -31,7 +40,9 @@ export class ObsidianTokenStorage implements TokenStorage {
 
       // Validate that we have the minimum required tokens
       if (!credentials.access_token || !credentials.refresh_token) {
-        console.log('Plugin tokens found but missing required fields (access_token or refresh_token)');
+        console.log(
+          'Plugin tokens found but missing required fields (access_token or refresh_token)',
+        );
         return null;
       }
 

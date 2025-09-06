@@ -8,64 +8,18 @@ import { describe, it, expect, beforeEach, afterEach, afterAll } from 'bun:test'
 
 import { DriveAPI } from './drive/DriveAPI';
 import { parseFrontMatter, buildFrontMatter, computeSHA256 } from './fs/frontmatter';
+import {
+  checkAuthenticationAvailable,
+  loadCLIToken,
+  createLiveDriveClient,
+} from './test-utils/auth-helpers';
 
 // Create a unique parent folder for each test run to avoid conflicts
 const TEST_SESSION_ID = `itest-session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 const ITEST_PROFILE = process.env.ITEST_PROFILE || 'default';
 const GOOGLE_APPLICATION_CREDENTIALS = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-function checkAuthenticationAvailable(): boolean {
-  // Check for service account (optional for CI)
-  if (GOOGLE_APPLICATION_CREDENTIALS) {
-    return true;
-  }
-
-  // Check for existing CLI tokens (PKCE-based)
-  return checkCLITokenExists();
-}
-
-function checkCLITokenExists(): boolean {
-  try {
-    const path = require('path');
-    const os = require('os');
-    const fs = require('fs');
-
-    // Check CLI tokens (now PKCE-based)
-    const cliConfigDir = path.join(os.homedir(), '.config', 'google-docs-sync');
-    const cliTokenPath = path.join(cliConfigDir, `tokens-${ITEST_PROFILE}.json`);
-
-    fs.accessSync(cliTokenPath, fs.constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Load CLI PKCE tokens
-async function loadCLIToken(profile: string = 'default'): Promise<any> {
-  const configDir = path.join(os.homedir(), '.config', 'google-docs-sync');
-  const tokenPath = path.join(configDir, `tokens-${profile}.json`);
-
-  try {
-    const tokenData = await fs.readFile(tokenPath, 'utf-8');
-    return JSON.parse(tokenData);
-  } catch (error) {
-    throw new Error(
-      `No CLI tokens found for profile "${profile}" at ${tokenPath}. Run: google-docs-sync auth`,
-    );
-  }
-}
-
-// Create authenticated client for integration tests
-async function createLiveDriveClient(): Promise<DriveAPI> {
-  // Load CLI tokens
-  const credentials = await loadCLIToken(ITEST_PROFILE);
-
-  // Create DriveAPI instance with access token
-  const driveAPI = new DriveAPI(credentials.access_token);
-
-  return driveAPI;
-}
+// Use shared implementations from test-utils/auth-helpers.ts
 
 const RUN_INTEGRATION_TESTS = process.env.RUN_INTEGRATION_TESTS === 'true';
 const SHOULD_RUN = RUN_INTEGRATION_TESTS && checkAuthenticationAvailable();

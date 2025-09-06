@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test';
 
+import { computeSHA256 } from '../fs/frontmatter';
 import { GoogleDocsSyncSettings } from '../types';
 
 import { SyncService } from './SyncService';
@@ -26,7 +27,7 @@ describe('SyncService', () => {
     it('should handle no-change scenario', async () => {
       const localContent = 'Hello World';
       // Compute proper SHA256 for the content
-      const contentSha256 = await SyncUtils.computeSHA256(localContent);
+      const contentSha256 = await computeSHA256(localContent);
 
       const localFrontmatter: FrontMatter = {
         'google-doc-id': 'doc123',
@@ -82,7 +83,7 @@ describe('SyncService', () => {
 
     it('should handle remote-only changes', async () => {
       const localContent = 'Hello World';
-      const localSha256 = await SyncUtils.computeSHA256(localContent);
+      const localSha256 = await computeSHA256(localContent);
 
       const localFrontmatter: FrontMatter = {
         'google-doc-id': 'doc123',
@@ -475,7 +476,7 @@ More content
     });
 
     it('should handle SHA256 computation errors gracefully', async () => {
-      // This test would require mocking SyncUtils.computeSHA256 to throw
+      // This test would require mocking computeSHA256 to throw
       // For now, we'll test that the service handles normal cases properly
       const result = await syncService.syncDocument(
         'content',
@@ -546,7 +547,7 @@ Remote conclusion.`;
       const remoteContent = 'Line 1\nLine 2\nRemote Line 3';
 
       // This should create conflict markers since both versions add different content
-      const baseContentSha256 = await SyncUtils.computeSHA256(baseContent);
+      const baseContentSha256 = await computeSHA256(baseContent);
 
       const result = await syncService.syncDocument(
         localContent,

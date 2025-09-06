@@ -32,7 +32,7 @@ bun run format
 # Build CLI
 bun run build:cli
 
-# Run locally without global install  
+# Run locally without global install
 bun run cli -- <command> [flags]
 
 # Link globally (optional)
@@ -58,7 +58,8 @@ bun run package:plugin
 
 ### Plugin Installation for Testing
 
-1. **Manual Installation**: 
+1. **Manual Installation**:
+
    ```bash
    # After building
    cp dist/main.js dist/manifest.json dist/styles.css /path/to/vault/.obsidian/plugins/gdocs-markdown-sync/
@@ -95,14 +96,15 @@ bun run test:coverage
 #### Prerequisites for Manual Testing
 
 1. **Google Cloud OAuth Client** (for auth testing):
+
    ```bash
    # Option 1: Use default public client (easier)
    # No setup required - uses built-in public OAuth client
-   
+
    # Option 2: Create your own OAuth client (for org testing)
    # 1. Go to Google Cloud Console
    # 2. Create/select project
-   # 3. Enable Google Drive API and Google Docs API  
+   # 3. Enable Google Drive API and Google Docs API
    # 4. Create OAuth 2.0 credentials (Desktop Application type)
    # 5. Note Client ID and Client Secret
    ```
@@ -121,12 +123,12 @@ gdocs-markdown-sync auth
 
 # Expected flow:
 # - Browser opens automatically
-# - User approves OAuth consent 
+# - User approves OAuth consent
 # - Browser redirects to localhost (automatic)
 # - CLI shows "Authentication successful!"
 # - Tokens saved to ~/.config/gdocs-markdown-sync/tokens-default.json
 
-# 2. Test CLI with custom profile  
+# 2. Test CLI with custom profile
 gdocs-markdown-sync auth --profile work
 
 # 3. Test basic CLI operations
@@ -136,7 +138,7 @@ gdocs-markdown-sync pull --drive-folder-id YOUR_FOLDER_ID --local-dir ./test-out
 
 # 4. Test conflict resolution
 # Edit the Google Doc in browser, then:
-echo "Local changes" >> test.md  
+echo "Local changes" >> test.md
 gdocs-markdown-sync sync test.md --drive-folder-id YOUR_FOLDER_ID --conflicts prefer-md
 ```
 
@@ -149,10 +151,11 @@ gdocs-markdown-sync sync test.md --drive-folder-id YOUR_FOLDER_ID --conflicts pr
 ```
 
 **Plugin Auth Flow Testing**:
+
 1. Open Obsidian Settings > Community Plugins > Google Docs Sync
 2. Configure OAuth settings:
    - Client ID: (leave blank to use default or enter your own)
-   - Client Secret: (leave blank to use default or enter your own)  
+   - Client Secret: (leave blank to use default or enter your own)
    - Drive Folder ID: YOUR_FOLDER_ID
 3. Click "Start Authentication"
 4. **Expected flow**:
@@ -165,15 +168,17 @@ gdocs-markdown-sync sync test.md --drive-folder-id YOUR_FOLDER_ID --conflicts pr
    - Tokens saved in Obsidian plugin data
 
 **Plugin Sync Testing**:
+
 1. Create a markdown file in your vault
 2. Open Command Palette (Cmd/Ctrl+P)
 3. Run "Google Docs Sync: Push to Drive"
 4. Verify document appears in Google Drive
 5. Edit the document in Google Drive
-6. Run "Google Docs Sync: Pull from Drive"  
+6. Run "Google Docs Sync: Pull from Drive"
 7. Verify changes appear in Obsidian
 
 **Plugin Settings Testing**:
+
 1. Test conflict resolution policies (prefer-doc, prefer-md, merge)
 2. Test background sync enable/disable
 3. Test authentication status display
@@ -182,13 +187,15 @@ gdocs-markdown-sync sync test.md --drive-folder-id YOUR_FOLDER_ID --conflicts pr
 #### Manual Test Checklist
 
 **CLI Authentication**:
-- [ ] Fresh auth with `gdocs-markdown-sync auth` 
+
+- [ ] Fresh auth with `gdocs-markdown-sync auth`
 - [ ] Auth with custom profile `--profile test`
 - [ ] Auth with custom client ID via `GOOGLE_OAUTH_CLIENT_ID=your_id`
 - [ ] Token refresh on expiry
 - [ ] Multiple profiles isolated correctly
 
-**Plugin Authentication**:  
+**Plugin Authentication**:
+
 - [ ] Fresh auth through plugin settings
 - [ ] Auth with default OAuth client (no config needed)
 - [ ] Auth with custom OAuth client (configured in settings)
@@ -197,20 +204,23 @@ gdocs-markdown-sync sync test.md --drive-folder-id YOUR_FOLDER_ID --conflicts pr
 - [ ] Clear authentication and re-auth
 
 **Core Sync Operations**:
-- [ ] CLI push (creates new Google Doc)  
+
+- [ ] CLI push (creates new Google Doc)
 - [ ] CLI pull (imports from Google Docs)
 - [ ] Plugin push via Command Palette
-- [ ] Plugin pull via Command Palette  
+- [ ] Plugin pull via Command Palette
 - [ ] Background sync in plugin
 - [ ] Frontmatter preservation (docId, revisionId, sha256)
 
 **Conflict Resolution**:
+
 - [ ] prefer-doc policy (CLI and plugin)
-- [ ] prefer-md policy (CLI and plugin)  
+- [ ] prefer-md policy (CLI and plugin)
 - [ ] merge policy with conflict markers
 - [ ] Manual conflict resolution workflow
 
 **Error Scenarios**:
+
 - [ ] Invalid OAuth code pasted
 - [ ] Network failures during auth
 - [ ] Token expiry handling
@@ -226,7 +236,7 @@ For automated integration tests, you need valid authentication:
 # First authenticate via CLI
 gdocs-markdown-sync auth
 
-# Then run integration tests  
+# Then run integration tests
 bun run test:integration
 
 # Integration tests will use the CLI tokens you just created
@@ -246,13 +256,14 @@ bun run build:cli && bun run build:plugin
 
 # 4. Manual testing (see above sections)
 
-# 5. Check final coverage  
+# 5. Check final coverage
 bun run test:coverage
 ```
 
 ### Debugging
 
 **CLI Debugging**:
+
 ```bash
 # Enable debug logging
 DEBUG=true bun run cli -- <command>
@@ -262,14 +273,16 @@ VERBOSE=true bun run cli -- <command>
 ```
 
 **Plugin Debugging**:
+
 - Open Obsidian Developer Tools (Cmd/Ctrl+Shift+I)
 - Check console for plugin logs
 - Network tab shows OAuth requests
 - Plugin logs include correlation IDs for tracing
 
 **OAuth Flow Debugging**:
+
 - Check browser Network tab during auth
-- Verify PKCE challenge/verifier generation  
+- Verify PKCE challenge/verifier generation
 - Validate token exchange requests
 - Check token storage locations:
   - CLI: `~/.config/gdocs-markdown-sync/tokens-*.json`
@@ -278,18 +291,21 @@ VERBOSE=true bun run cli -- <command>
 ### Common Development Tasks
 
 **Adding New OAuth Features**:
+
 1. Update both CLI (`UnifiedOAuthManager`) and Plugin (`plugin-main.ts`) flows
 2. Add tests to `src/auth/auth.test.ts`
 3. Update documentation in `TECHNICAL_ARCHITECTURE.md`
 4. Manual testing required for both flows
 
 **Testing Network Changes**:
+
 - Run against real Google APIs (integration tests)
 - Test rate limiting and error scenarios
 - Verify retry logic with network interruptions
 
 **Adding New Sync Features**:
-- Update `ConflictResolver` and `SyncService` 
+
+- Update `ConflictResolver` and `SyncService`
 - Add unit tests for conflict scenarios
 - Test with real documents in manual testing
 - Verify frontmatter preservation
@@ -329,6 +345,7 @@ Commit/PR Guidelines
 ### Security Testing
 
 When testing OAuth flows:
+
 - Use dedicated test Google accounts (not production data)
 - Test with minimal Drive folder permissions
 - Verify tokens are properly isolated by profile

@@ -111,10 +111,10 @@ async function updateManifestVersion(versionInfo: VersionInfo): Promise<void> {
     // Update manifest with detailed version for plugin deployment
     const oldVersion = manifest.version;
     manifest.version = versionInfo.fullVersion;
-    
+
     // Write updated manifest
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
-    
+
     console.log(`Manifest version updated: ${oldVersion} → ${versionInfo.fullVersion}`);
     console.log(`Runtime version (dynamic): ${versionInfo.fullVersion}`);
   } catch (error) {

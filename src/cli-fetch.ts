@@ -3,12 +3,16 @@
 // Modern CLI using fetch API and shared components
 // Commands: auth | pull | push | sync | help
 
-import { promises as fs, readFileSync } from 'fs';
+// Note: All filesystem operations now use FilesystemStorage
 import path from 'path';
 
 import { AuthManagerFactory } from './auth/AuthManagerFactory.js';
 import { parseArgs, getFlag, Dict } from './cli_utils.js';
 import { DriveAPI } from './drive/DriveAPI.js';
+import { computeSHA256 } from './fs/frontmatter.js';
+import { SheetSyncService } from './sheets/SheetSyncService.js';
+import { SheetStorageSettings } from './sheets/SheetUtils.js';
+import { FilesystemStorage } from './storage/FilesystemStorage.js';
 import { ConflictResolver } from './sync/ConflictResolver.js';
 import { createSyncService } from './sync/SyncService.js';
 import { SyncUtils } from './sync/SyncUtils.js';
@@ -31,6 +35,7 @@ Flags:
   --drive-folder      Google Drive folder name or ID (env: DRIVE_FOLDER)
   --local-dir         Local directory for Markdown (env: LOCAL_DIR)
   --conflicts         Conflict policy: prefer-doc|prefer-md|merge (env: CONFLICT_POLICY)
+  --sync-sheets       Include Google Sheets in sync operations (default: false)
   --dry-run           Preview changes without executing them
   --log-level         Set log level: DEBUG, INFO, WARN, ERROR (env: LOG_LEVEL)
 
@@ -41,16 +46,19 @@ Conflict Resolution:
 
 Notes:
   - 'auth' launches an OAuth flow and saves tokens for reuse.
-  - 'pull' exports Google Docs in the folder to Markdown into local-dir.
-  - 'push' uploads/updates Markdown files from local-dir to Google Docs.
+  - 'pull' exports Google Docs and Sheets in the folder to local files.
+  - 'push' uploads/updates local files to Google Docs and Sheets.
   - 'sync' performs intelligent bidirectional sync with conflict resolution.
+  - Google Sheets are stored as markdown tables, CSV, or CSVY based on size/complexity.
+  - Formulas are preserved on Google Sheets side; only values are synced.
   - If --drive-folder contains a name (not starting with folder ID pattern), 
     the CLI will find or create a folder with that name in your Drive root.
 `);
 }
 
-async function ensureDir(dir: string) {
-  await fs.mkdir(dir, { recursive: true });
+// Helper to create FilesystemStorage instance
+function createStorage(baseDirectory: string): FilesystemStorage {
+  return new FilesystemStorage(baseDirectory);
 }
 
 async function cmdAuth() {
@@ -65,25 +73,28 @@ async function cmdAuth() {
     await authManager.startAuthFlow();
 
     operation.success('✅ OAuth authentication complete.');
-    
+
     // Display workspace information
     try {
       const driveAPI = await getDriveAPI();
-      const response = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
-        headers: {
-          'Authorization': `Bearer ${driveAPI.getAccessToken()}`,
+      const response = await fetch(
+        'https://www.googleapis.com/drive/v3/about?fields=user,storageQuota',
+        {
+          headers: {
+            Authorization: `Bearer ${driveAPI.getAccessToken()}`,
+          },
         },
-      });
-      
+      );
+
       if (response.ok) {
         const userInfo = await response.json();
         const email = userInfo.user?.emailAddress || 'Unknown email';
         const displayName = userInfo.user?.displayName || 'Unknown';
         const domain = email.includes('@') ? email.split('@')[1] : 'Unknown domain';
-        
+
         operation.info(`👤 Authenticated as: ${displayName} (${email})`);
         operation.info(`🏢 Workspace Domain: ${domain}`);
-        
+
         // Display storage quota if available
         if (userInfo.storageQuota) {
           const used = parseInt(userInfo.storageQuota.usage || '0');
@@ -129,42 +140,18 @@ async function getDriveAPI() {
   )();
 }
 
-// Recursively walk directory tree and find all markdown files
-async function walkMarkdownFiles(
-  dir: string,
-  baseDir: string = dir,
+// Helper to get markdown files using FilesystemStorage
+async function getMarkdownFiles(
+  storage: FilesystemStorage,
+  directory: string,
 ): Promise<Array<{ relativePath: string; fullPath: string; name: string }>> {
-  const results: Array<{ relativePath: string; fullPath: string; name: string }> = [];
+  const markdownPaths = await storage.walkDirectory(directory, '*.md');
 
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      const relativePath = path.relative(baseDir, fullPath);
-
-      // Skip hidden directories and common ignore patterns
-      if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '.git') {
-        continue;
-      }
-
-      if (entry.isDirectory()) {
-        // Recursively walk subdirectories
-        const subResults = await walkMarkdownFiles(fullPath, baseDir);
-        results.push(...subResults);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-        results.push({
-          relativePath,
-          fullPath,
-          name: entry.name,
-        });
-      }
-    }
-  } catch (error) {
-    console.warn(`Failed to read directory ${dir}:`, error);
-  }
-
-  return results;
+  return markdownPaths.map((fullPath) => {
+    const relativePath = path.relative(directory, fullPath);
+    const name = storage.getBaseName(fullPath);
+    return { relativePath, fullPath, name };
+  });
 }
 
 async function cmdPull(flags: Dict) {
@@ -184,19 +171,29 @@ async function cmdPull(flags: Dict) {
     }
 
     const driveAPI = await getDriveAPI();
+    const storage = createStorage(localDir);
 
     // Resolve folder name or ID to actual folder ID
     const driveFolderId = await driveAPI.resolveFolderId(driveFolder);
 
-    await ensureDir(localDir);
+    await storage.createDirectory('.');
     operation.info(`Pulling from Drive folder "${driveFolder}" (${driveFolderId}) -> ${localDir}`);
 
     const docs = await driveAPI.listDocsInFolder(driveFolderId);
-    operation.info(`Found ${docs.length} document(s)`);
+    const syncSheets = flags['sync-sheets'] === 'true';
+
+    // Separate documents and sheets
+    const documents = docs.filter(
+      (doc) => doc.mimeType === 'application/vnd.google-apps.document' || !doc.mimeType,
+    );
+    const sheets = docs.filter((doc) => doc.mimeType === 'application/vnd.google-apps.spreadsheet');
+
+    operation.info(`Found ${documents.length} document(s) and ${sheets.length} spreadsheet(s)`);
 
     let successCount = 0;
 
-    for (const doc of docs) {
+    // Process documents
+    for (const doc of documents) {
       const docLogger = logger.startOperation('pull-document', {
         resourceId: doc.id,
         resourceName: doc.name,
@@ -208,7 +205,7 @@ async function cmdPull(flags: Dict) {
 
         // Build frontmatter
         const frontmatter = SyncUtils.buildPullFrontmatter(doc, appProps, markdown);
-        frontmatter.sha256 = await SyncUtils.computeSHA256(markdown);
+        frontmatter.sha256 = await computeSHA256(markdown);
 
         const content = SyncUtils.buildMarkdownWithFrontmatter(frontmatter, markdown);
 
@@ -218,15 +215,15 @@ async function cmdPull(flags: Dict) {
 
         if (doc.relativePath) {
           // Document is in a subfolder
-          const nestedPath = path.join(localDir, doc.relativePath);
-          await ensureDir(nestedPath);
-          filePath = path.join(nestedPath, fileName);
+          const nestedPath = doc.relativePath;
+          await storage.createDirectory(nestedPath);
+          filePath = storage.joinPath(nestedPath, fileName);
         } else {
           // Document is in root folder
-          filePath = path.join(localDir, fileName);
+          filePath = fileName;
         }
 
-        await fs.writeFile(filePath, content, 'utf8');
+        await storage.writeFile(filePath, content);
         docLogger.success(
           `✓ Pulled ${doc.name}${doc.relativePath ? ` (${doc.relativePath})` : ''}`,
         );
@@ -246,15 +243,55 @@ async function cmdPull(flags: Dict) {
       }
     }
 
+    // Process sheets if enabled
+    if (syncSheets && sheets.length > 0) {
+      operation.info(`Processing ${sheets.length} Google Sheets...`);
+
+      const sheetSettings: SheetStorageSettings = {
+        maxRowsForMarkdown: 50,
+        maxRowsForCSVY: 500,
+        preferredFormat: 'auto',
+        preserveFormulas: true,
+        formulaDisplay: 'value',
+      };
+
+      const accessToken = driveAPI.getAccessToken();
+      const sheetSyncService = new SheetSyncService(accessToken, sheetSettings);
+
+      try {
+        const sheetResult = await sheetSyncService.pullSheets(sheets, localDir);
+        operation.info(
+          `✓ Processed ${sheetResult.sheetsUpdated} sheets, preserved ${sheetResult.formulasPreserved} formulas`,
+        );
+
+        if (sheetResult.errors.length > 0) {
+          operation.warn(`⚠ ${sheetResult.errors.length} sheet errors occurred`);
+          for (const error of sheetResult.errors) {
+            operation.warn(`  • ${error.file}: ${error.error}`);
+          }
+        }
+
+        successCount += sheetResult.sheetsUpdated;
+      } catch (error) {
+        operation.warn(
+          `Failed to process sheets: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } else if (sheets.length > 0) {
+      operation.info(`📊 Found ${sheets.length} sheet(s) - use --sync-sheets to include them`);
+    }
+
     // Summary
     if (errorAggregator.hasErrors()) {
       const summary = errorAggregator.getSummary('pull-documents');
+      const totalItems = documents.length + (syncSheets ? sheets.length : 0);
       operation.warn(
-        `Pull completed with ${summary.totalErrors} error(s). Successfully pulled ${successCount}/${docs.length} documents`,
+        `Pull completed with ${summary.totalErrors} error(s). Successfully pulled ${successCount}/${totalItems} items`,
       );
       logger.warn('Pull errors summary:', {}, new Error(errorAggregator.toString()));
     } else {
-      operation.success(`✅ Successfully pulled all ${docs.length} documents`);
+      const totalItems = documents.length + (syncSheets ? sheets.length : 0);
+      operation.success(`✅ Successfully pulled all ${totalItems} items`);
     }
   } catch (error) {
     operation.failure('Pull operation failed', {}, error instanceof Error ? error : undefined);
@@ -272,6 +309,7 @@ async function cmdPush(flags: Dict) {
   }
 
   const driveAPI = await getDriveAPI();
+  const storage = createStorage(localDir);
 
   // Resolve folder name or ID to actual folder ID
   const driveFolderId = await driveAPI.resolveFolderId(driveFolder);
@@ -279,12 +317,12 @@ async function cmdPush(flags: Dict) {
   console.log(`Pushing from ${localDir} -> Drive folder "${driveFolder}" (${driveFolderId})`);
 
   // Recursively find all markdown files
-  const files = await walkMarkdownFiles(localDir);
+  const files = await getMarkdownFiles(storage, '.');
   console.log(`Found ${files.length} markdown files (including nested directories)`);
 
   for (const file of files) {
     try {
-      const raw = await fs.readFile(file.fullPath, 'utf8');
+      const raw = await storage.readFile(file.fullPath);
       const { frontmatter, markdown } = SyncUtils.parseFrontMatter(raw);
 
       // Sanitize markdown content for Google Drive compatibility
@@ -311,13 +349,13 @@ async function cmdPush(flags: Dict) {
               path.parse(file.name).name,
               info.headRevisionId,
             );
-            updatedFrontmatter.sha256 = await SyncUtils.computeSHA256(markdown);
+            updatedFrontmatter.sha256 = await computeSHA256(markdown);
 
             const updatedContent = SyncUtils.buildMarkdownWithFrontmatter(
               updatedFrontmatter,
               markdown,
             );
-            await fs.writeFile(file.fullPath, updatedContent, 'utf8');
+            await storage.writeFile(file.fullPath, updatedContent);
             console.log(`✓ Updated ${file.relativePath}`);
             continue; // Skip to next file
           }
@@ -353,13 +391,46 @@ async function cmdPush(flags: Dict) {
         newDocId,
         path.parse(file.name).name,
       );
-      updatedFrontmatter.sha256 = await SyncUtils.computeSHA256(markdown);
+      updatedFrontmatter.sha256 = await computeSHA256(markdown);
 
       const updatedContent = SyncUtils.buildMarkdownWithFrontmatter(updatedFrontmatter, markdown);
-      await fs.writeFile(file.fullPath, updatedContent, 'utf8');
+      await storage.writeFile(file.fullPath, updatedContent);
       console.log(`✓ Created ${file.relativePath} -> ${newDocId}`);
     } catch (err: any) {
       console.error(`✗ Failed to push ${file.relativePath}: ${err?.message ?? err}`);
+    }
+  }
+
+  // Process sheet files if enabled
+  const syncSheets = flags['sync-sheets'] === 'true';
+  if (syncSheets) {
+    console.log(`Pushing Google Sheets from ${localDir}...`);
+
+    const sheetSettings: SheetStorageSettings = {
+      maxRowsForMarkdown: 50,
+      maxRowsForCSVY: 500,
+      preferredFormat: 'auto',
+      preserveFormulas: true,
+      formulaDisplay: 'value',
+    };
+
+    const accessToken = driveAPI.getAccessToken();
+    const sheetSyncService = new SheetSyncService(accessToken, sheetSettings);
+
+    try {
+      const sheetResult = await sheetSyncService.pushSheets(localDir, driveFolderId);
+      console.log(`✓ Pushed ${sheetResult.sheetsUpdated} sheets to Google Drive`);
+
+      if (sheetResult.errors.length > 0) {
+        console.warn(`⚠ ${sheetResult.errors.length} sheet errors occurred`);
+        for (const error of sheetResult.errors) {
+          console.warn(`  • ${error.file}: ${error.error}`);
+        }
+      }
+    } catch (error) {
+      console.error(
+        `Failed to push sheets: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }
@@ -401,8 +472,9 @@ async function cmdSync(flags: Dict) {
     };
 
     const syncService = createSyncService(settings);
+    const storage = createStorage(localDir);
 
-    await ensureDir(localDir);
+    await storage.createDirectory('.');
     operation.info(
       `Intelligent sync: Drive folder "${driveFolder}" (${driveFolderId}) ↔ ${localDir}`,
     );
@@ -414,12 +486,24 @@ async function cmdSync(flags: Dict) {
       operation.info('🔍 DRY RUN MODE - No changes will be made');
     }
 
-    // Get all documents from Drive
+    // Get all documents and sheets from Drive
     const remoteDocs = await driveAPI.listDocsInFolder(driveFolderId);
-    operation.info(`Found ${remoteDocs.length} remote document(s)`);
+    const syncSheets = flags['sync-sheets'] === 'true';
+
+    // Separate documents and sheets
+    const documents = remoteDocs.filter(
+      (doc) => doc.mimeType === 'application/vnd.google-apps.document' || !doc.mimeType,
+    );
+    const sheets = remoteDocs.filter(
+      (doc) => doc.mimeType === 'application/vnd.google-apps.spreadsheet',
+    );
+
+    operation.info(
+      `Found ${documents.length} remote document(s) and ${sheets.length} spreadsheet(s)`,
+    );
 
     // Get all local markdown files
-    const localFiles = await walkMarkdownFiles(localDir);
+    const localFiles = await getMarkdownFiles(storage, '.');
     operation.info(`Found ${localFiles.length} local markdown file(s)`);
 
     let syncCount = 0;
@@ -427,7 +511,7 @@ async function cmdSync(flags: Dict) {
     let skipCount = 0;
 
     // Process each remote document
-    for (const doc of remoteDocs) {
+    for (const doc of documents) {
       const docLogger = logger.startOperation('sync-document', {
         resourceId: doc.id,
         resourceName: doc.name,
@@ -435,17 +519,26 @@ async function cmdSync(flags: Dict) {
 
       try {
         // Find corresponding local file
-        const localFile = localFiles.find((f) => {
-          const content = readFileSync(f.fullPath, 'utf8');
-          const { frontmatter } = SyncUtils.parseFrontMatter(content);
-          return frontmatter.docId === doc.id || frontmatter['google-doc-id'] === doc.id;
-        });
+        let localFile: (typeof localFiles)[0] | undefined;
+        for (const f of localFiles) {
+          try {
+            const content = await storage.readFile(f.fullPath);
+            const { frontmatter } = SyncUtils.parseFrontMatter(content);
+            if (frontmatter.docId === doc.id || frontmatter['google-doc-id'] === doc.id) {
+              localFile = f;
+              break;
+            }
+          } catch {
+            // Skip files that can't be read
+            continue;
+          }
+        }
 
         let localContent = '';
         let localFrontmatter = {};
 
         if (localFile) {
-          const raw = await fs.readFile(localFile.fullPath, 'utf8');
+          const raw = await storage.readFile(localFile.fullPath);
           const parsed = SyncUtils.parseFrontMatter(raw);
           localContent = parsed.markdown;
           localFrontmatter = parsed.frontmatter;
@@ -497,14 +590,14 @@ async function cmdSync(flags: Dict) {
           } else {
             // Create new file
             const fileName = SyncUtils.sanitizeFileName(doc.name) + '.md';
-            filePath = path.join(localDir, fileName);
+            filePath = fileName;
           }
 
           const updatedDocument = SyncUtils.buildMarkdownWithFrontmatter(
             syncResult.updatedFrontmatter,
             syncResult.updatedContent,
           );
-          await fs.writeFile(filePath, updatedDocument, 'utf8');
+          await storage.writeFile(filePath, updatedDocument);
         }
 
         // Show conflict details if needed
@@ -534,7 +627,7 @@ async function cmdSync(flags: Dict) {
     // Process orphaned local files (files with docId but no matching remote doc)
     for (const localFile of localFiles) {
       try {
-        const raw = await fs.readFile(localFile.fullPath, 'utf8');
+        const raw = await storage.readFile(localFile.fullPath);
         const { frontmatter } = SyncUtils.parseFrontMatter(raw);
         const docId = frontmatter.docId || frontmatter['google-doc-id'];
 
@@ -546,6 +639,22 @@ async function cmdSync(flags: Dict) {
         }
       } catch (err) {
         operation.warn(`Failed to check local file ${localFile.relativePath}: ${err}`);
+      }
+    }
+
+    // Note about sheet sync
+    if (sheets.length > 0) {
+      if (syncSheets) {
+        operation.info(
+          `📊 Found ${sheets.length} sheet(s) - bidirectional sheet sync not yet implemented`,
+        );
+        operation.info(
+          `   Use 'pull --sync-sheets' and 'push --sync-sheets' for one-way sheet sync`,
+        );
+      } else {
+        operation.info(
+          `📊 Found ${sheets.length} sheet(s) - use --sync-sheets to enable sheet operations`,
+        );
       }
     }
 

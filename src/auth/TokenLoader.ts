@@ -2,13 +2,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 
-export interface Credentials {
-  access_token?: string;
-  refresh_token?: string;
-  scope?: string;
-  token_type?: string;
-  expiry_date?: number;
-}
+import { Credentials, TokenUtils } from './TokenStorage';
 
 export class TokenLoader {
   private profile: string;
@@ -68,19 +62,6 @@ export class TokenLoader {
    * Checks if tokens are expired
    */
   isTokenExpired(credentials: Credentials): boolean {
-    if (!credentials.expiry_date) {
-      return false; // No expiry date means it doesn't expire
-    }
-
-    const now = Date.now();
-    const expiry =
-      typeof credentials.expiry_date === 'number'
-        ? credentials.expiry_date
-        : new Date(credentials.expiry_date as any).getTime();
-
-    // Add 5-minute buffer to refresh before actual expiry
-    const buffer = 5 * 60 * 1000;
-
-    return now >= expiry - buffer;
+    return TokenUtils.isTokenExpired(credentials);
   }
 }

@@ -66,18 +66,20 @@ async function createLiveDriveClient(): Promise<DriveAPI> {
 }
 
 // Check if local path exists and is accessible
-async function checkLocalPath(localPath: string): Promise<{ exists: boolean; resolvedPath: string }> {
+async function checkLocalPath(
+  localPath: string,
+): Promise<{ exists: boolean; resolvedPath: string }> {
   try {
     const resolvedPath = path.resolve(localPath);
     const stat = await fs.stat(resolvedPath);
     return {
       exists: stat.isDirectory(),
-      resolvedPath
+      resolvedPath,
     };
   } catch {
     return {
       exists: false,
-      resolvedPath: path.resolve(localPath)
+      resolvedPath: path.resolve(localPath),
     };
   }
 }
@@ -85,13 +87,13 @@ async function checkLocalPath(localPath: string): Promise<{ exists: boolean; res
 // Get all markdown files from local directory
 async function getLocalMarkdownFiles(localPath: string): Promise<string[]> {
   const files: string[] = [];
-  
+
   try {
     const entries = await fs.readdir(localPath, { withFileTypes: true });
-    
+
     for (const entry of entries) {
       const fullPath = path.join(localPath, entry.name);
-      
+
       if (entry.isDirectory()) {
         // Recursively scan subdirectories
         const subFiles = await getLocalMarkdownFiles(fullPath);
@@ -103,7 +105,7 @@ async function getLocalMarkdownFiles(localPath: string): Promise<string[]> {
   } catch (error) {
     console.warn(`Warning: Could not read directory ${localPath}:`, error);
   }
-  
+
   return files;
 }
 
@@ -156,7 +158,7 @@ d('Folder Sync Integration Tests', () => {
     console.log(`📊 Discovery Summary:`);
     console.log(`   📄 Documents found: ${driveDocuments.length}`);
     console.log(`   🔍 Search strategy executed successfully: ${driveDocuments.length >= 0}`);
-    
+
     // The test passes if the search executes without errors, regardless of document count
     // This helps diagnose authentication/permission differences between CLI and plugin contexts
 
@@ -167,19 +169,19 @@ d('Folder Sync Integration Tests', () => {
     for (const doc of driveDocuments) {
       try {
         console.log(`🔍 Testing access to document "${doc.name}" (${doc.id})`);
-        
+
         // Try to get document metadata
         const docInfo = await driveClient.getFile(doc.id);
         expect(docInfo).toBeDefined();
         expect(docInfo.id).toBe(doc.id);
         console.log(`   ✅ Document accessible: "${docInfo.name}"`);
-        
+
         // Try to export document content
         const content = await driveClient.exportDocMarkdown(doc.id);
         expect(content).toBeDefined();
         expect(typeof content).toBe('string');
         console.log(`   📄 Content exported: ${content.length} characters`);
-        
+
         accessibleCount++;
       } catch (error) {
         console.log(`   ❌ Document inaccessible: ${error}`);
@@ -231,7 +233,7 @@ d('Folder Sync Integration Tests', () => {
 
         const relativePath = path.relative(localPath, filePath);
         console.log(`🔍 Analyzing file: ${relativePath}`);
-        
+
         if (data.docId || data['google-doc-id']) {
           const docId = data.docId || data['google-doc-id'];
           console.log(`   📄 Has Google Doc ID: ${docId}`);
@@ -275,7 +277,7 @@ d('Folder Sync Integration Tests', () => {
       autoSync: false,
       syncInterval: 300000, // 5 minutes
       maxRetries: 3,
-      debugMode: true
+      debugMode: true,
     };
 
     const syncService = createSyncService(syncSettings);
@@ -283,7 +285,7 @@ d('Folder Sync Integration Tests', () => {
 
     // Test that the sync service can be created with our folder configuration
     const driveDocuments = await driveClient.listDocsInFolder(FOLDER_ID);
-    
+
     if (driveDocuments.length > 0) {
       const testDoc = driveDocuments[0];
       console.log(`🧪 Testing sync preconditions with document: "${testDoc.name}"`);
@@ -300,7 +302,7 @@ d('Folder Sync Integration Tests', () => {
       // Test sync validation
       const validation = syncService.validateSyncPreconditions(mockContent, mockFrontmatter);
       console.log(`   📋 Sync validation result: ${validation.valid}`);
-      
+
       if (!validation.valid) {
         console.log(`   ⚠️  Validation error: ${validation.error}`);
       }
@@ -313,13 +315,13 @@ d('Folder Sync Integration Tests', () => {
 
   it('should test document parent folder consistency issue', async () => {
     console.log(`🐛 Testing specific issue: Documents with wrong parent folder IDs`);
-    
-    // Based on Obsidian plugin logs, some documents show parent "0AAno4AQJd4ALUk9PVA" 
+
+    // Based on Obsidian plugin logs, some documents show parent "0AAno4AQJd4ALUk9PVA"
     // instead of the expected folder ID "1TYOD7xWenfVRrwYXqUG2KP9rpp5Juvjn"
-    
+
     console.log(`🔍 Expected folder ID: ${FOLDER_ID}`);
     console.log(`⚠️  Wrong parent ID from logs: 0AAno4AQJd4ALUk9PVA`);
-    
+
     // Test specific document IDs mentioned in the logs that should be in our folder
     const problematicDocIds = [
       '1mb9LbmIddZJMG8qwQfwwTRA0L5P9qS2oRceNEncrPHY', // AGENTS
@@ -327,9 +329,11 @@ d('Folder Sync Integration Tests', () => {
       '18dEGqLFKfAIYl7p4z_2nb9s8cGNuvGcvWE0AG4JO4Ec', // obsidian-google-docs-workflow
       '1oO6tSfJx4CZ3hYd0a4v-xg-kBazkXafd-gL6w1lSwY4', // SECURITY
     ];
-    
-    console.log(`📄 Testing ${problematicDocIds.length} specific documents mentioned in plugin logs:`);
-    
+
+    console.log(
+      `📄 Testing ${problematicDocIds.length} specific documents mentioned in plugin logs:`,
+    );
+
     for (const docId of problematicDocIds) {
       try {
         const docInfo = await driveClient.getFile(docId);
@@ -339,12 +343,14 @@ d('Folder Sync Integration Tests', () => {
         console.log(`     Expected parent: ${FOLDER_ID}`);
         console.log(`     Parent match: ${docInfo.parents?.includes(FOLDER_ID) || false}`);
         console.log(`     Modified: ${docInfo.modifiedTime || 'unknown'}`);
-        
+
         // Check if this document has the wrong parent folder ID
         if (docInfo.parents && docInfo.parents.includes('0AAno4AQJd4ALUk9PVA')) {
-          console.log(`     🐛 ISSUE CONFIRMED: Document has wrong parent folder "0AAno4AQJd4ALUk9PVA"`);
+          console.log(
+            `     🐛 ISSUE CONFIRMED: Document has wrong parent folder "0AAno4AQJd4ALUk9PVA"`,
+          );
         }
-        
+
         // Try to access the document content to verify it's accessible
         try {
           const content = await driveClient.exportDocMarkdown(docId);
@@ -352,18 +358,17 @@ d('Folder Sync Integration Tests', () => {
         } catch (error) {
           console.log(`     ❌ Content not accessible: ${error}`);
         }
-        
       } catch (error) {
         console.log(`   ❌ Document ${docId} not accessible: ${error}`);
       }
     }
-    
+
     console.log(`🔍 KEY FINDINGS:`);
     console.log(`   📄 Documents are accessible by direct ID in CLI context`);
     console.log(`   ⚠️  Document metadata (name, parents) shows as undefined/empty in CLI`);
     console.log(`   📊 Plugin context shows full metadata but CLI context has limited access`);
     console.log(`   💡 This suggests different OAuth scopes between CLI and plugin authentication`);
-    
+
     // This test helps identify why documents appear in plugin logs but not in folder searches
     expect(true).toBe(true); // Test passes if it completes without throwing
   }, 120000); // 2 minute timeout
@@ -387,7 +392,7 @@ d('Folder Sync Integration Tests', () => {
 
     console.log(`📈 Final Results Summary:`);
     console.log(`   📄 Total documents found: ${documents.length}`);
-    
+
     // Group documents by path
     const pathGroups: Record<string, typeof documents> = {};
     for (const doc of documents) {
@@ -414,7 +419,7 @@ d('Folder Sync Integration Tests', () => {
       try {
         const content = await driveClient.exportDocMarkdown(testDoc.id);
         console.log(`   ✅ Successfully exported ${content.length} characters`);
-        
+
         // Test content preview (first 200 chars)
         const preview = content.substring(0, 200).replace(/\n/g, '\\n');
         console.log(`   📄 Content preview: "${preview}${content.length > 200 ? '...' : ''}"`);

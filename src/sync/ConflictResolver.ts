@@ -395,14 +395,18 @@ export class ConflictResolver {
   /**
    * Validate that a policy string is valid
    */
-  static isValidPolicy(policy: string): policy is 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge' {
+  static isValidPolicy(
+    policy: string,
+  ): policy is 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge' {
     return ['last-write-wins', 'prefer-doc', 'prefer-md', 'merge'].includes(policy);
   }
 
   /**
    * Get human-readable description of conflict policy
    */
-  static getPolicyDescription(policy: 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge'): string {
+  static getPolicyDescription(
+    policy: 'last-write-wins' | 'prefer-doc' | 'prefer-md' | 'merge',
+  ): string {
     switch (policy) {
       case 'last-write-wins':
         return 'Use the version that was modified most recently';

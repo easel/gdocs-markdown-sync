@@ -162,14 +162,14 @@ export function buildFrontMatter(data: FrontMatter, content: string): string {
 
 export async function computeSHA256(content: string): Promise<string> {
   // Unified crypto implementation using Web Crypto API
-  // 
+  //
   // WHY WEB CRYPTO API FOR BOTH CLI AND PLUGIN:
   // - Bun supports Web Crypto API (crypto.subtle) natively
-  // - Obsidian/Electron provides Web Crypto API reliably  
+  // - Obsidian/Electron provides Web Crypto API reliably
   // - Eliminates platform-specific crypto handling
   // - More consistent behavior across environments
   // - Avoids Node.js crypto import issues in Electron
-  
+
   if (typeof crypto !== 'undefined' && crypto.subtle) {
     // Use Web Crypto API for both Bun CLI and Obsidian plugin
     const encoder = new TextEncoder();

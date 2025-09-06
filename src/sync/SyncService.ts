@@ -5,10 +5,11 @@
  * for both CLI and plugin usage.
  */
 
+import { computeSHA256 } from '../fs/frontmatter';
 import { GoogleDocsSyncSettings } from '../types';
 
 import { ConflictResolver, SyncState, ConflictInfo } from './ConflictResolver';
-import { SyncUtils, FrontMatter } from './SyncUtils';
+import { FrontMatter } from './SyncUtils';
 
 export interface SyncResult {
   success: boolean;
@@ -45,8 +46,8 @@ export class SyncService {
   ): Promise<{ result: SyncResult; updatedContent?: string; updatedFrontmatter?: FrontMatter }> {
     try {
       // Compute current content hashes
-      const localSha256 = await SyncUtils.computeSHA256(localContent);
-      const remoteSha256 = await SyncUtils.computeSHA256(remoteContent);
+      const localSha256 = await computeSHA256(localContent);
+      const remoteSha256 = await computeSHA256(remoteContent);
 
       // Build sync state for 3-way comparison
       const syncState: SyncState = {
@@ -124,9 +125,7 @@ export class SyncService {
         );
 
         // Update SHA256 with resolved content
-        resolvedState.frontmatter.sha256 = await SyncUtils.computeSHA256(
-          resolutionResult.mergedContent,
-        );
+        resolvedState.frontmatter.sha256 = await computeSHA256(resolutionResult.mergedContent);
 
         return {
           result: {
@@ -152,9 +151,7 @@ export class SyncService {
       );
 
       // Update SHA256 with resolved content
-      resolvedState.frontmatter.sha256 = await SyncUtils.computeSHA256(
-        resolutionResult.mergedContent,
-      );
+      resolvedState.frontmatter.sha256 = await computeSHA256(resolutionResult.mergedContent);
 
       return {
         result: {

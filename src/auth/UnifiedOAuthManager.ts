@@ -14,30 +14,32 @@ export interface OAuthConfig {
 
 interface OAuthClientConfig {
   clientId: string;
-  clientSecret?: string;  // iOS doesn't need it
+  clientSecret?: string; // iOS doesn't need it
   redirectUriPattern: (param?: any) => string;
-  protocolHandlerPath?: string;  // For Obsidian protocol registration
+  protocolHandlerPath?: string; // For Obsidian protocol registration
 }
 
 // Centralized OAuth configuration for different client types
 const OAUTH_CONFIGS: Record<string, OAuthClientConfig> = {
   desktop: {
-    clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || 
+    clientId:
+      process.env.GOOGLE_OAUTH_CLIENT_ID ||
       '181003307316-5devin5s9sh5tmvunurn4jh4m6m8p89v.apps.googleusercontent.com',
-    clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || 
-      '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',
+    clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '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',
     redirectUriPattern: (port: number) => `http://localhost:${port}/callback`,
   },
   ios: {
-    clientId: process.env.GOOGLE_OAUTH_IOS_CLIENT_ID || 
+    clientId:
+      process.env.GOOGLE_OAUTH_IOS_CLIENT_ID ||
       '181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe.apps.googleusercontent.com',
-    clientSecret: undefined,  // iOS clients don't use secret
+    clientSecret: undefined, // iOS clients don't use secret
     redirectUriPattern: (clientId: string) => {
       const reversed = clientId.split('.').reverse().join('.');
       return `${reversed}:/oauth2redirect/google`;
     },
-    protocolHandlerPath: 'com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe/oauth2redirect/google',
-  }
+    protocolHandlerPath:
+      'com.googleusercontent.apps.181003307316-d2m2p60gu18rt7il0ndlvsmfkft0jkpe/oauth2redirect/google',
+  },
 };
 
 /**
@@ -239,10 +241,7 @@ export class UnifiedOAuthManager {
           }
 
           try {
-            const credentials = await this.exchangeCodeForTokens(
-              code as string,
-              codeVerifier,
-            );
+            const credentials = await this.exchangeCodeForTokens(code as string, codeVerifier);
 
             res.send(`
               <h1>Authorization Successful!</h1>
@@ -284,7 +283,7 @@ export class UnifiedOAuthManager {
    */
   private async startBrowserAuthFlow(): Promise<Credentials> {
     throw new Error(
-      'Browser auth flow requires interactive handling. Use getAuthorizationUrl() and exchangeCodeForTokens() instead.'
+      'Browser auth flow requires interactive handling. Use getAuthorizationUrl() and exchangeCodeForTokens() instead.',
     );
   }
 
@@ -294,11 +293,11 @@ export class UnifiedOAuthManager {
    */
   async getAuthorizationUrl(): Promise<{ url: string; codeVerifier: string }> {
     const { codeVerifier, codeChallenge } = await this.generatePKCE();
-    
+
     // Get redirect URI from centralized config
     const redirectUri = this.getRedirectUri();
     const url = this.buildAuthUrl(codeChallenge, redirectUri);
-    
+
     return { url, codeVerifier };
   }
 
@@ -312,7 +311,7 @@ export class UnifiedOAuthManager {
     return ErrorUtils.withErrorContext(
       async () => {
         const redirectUri = this.getRedirectUri();
-        
+
         const tokenResponse = await NetworkUtils.fetchWithRetry(
           'https://oauth2.googleapis.com/token',
           {
@@ -320,24 +319,28 @@ export class UnifiedOAuthManager {
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: new URLSearchParams(Object.fromEntries([
-              ['client_id', this.getClientId()],
-              ...(this.getClientSecret() ? [['client_secret', this.getClientSecret()]] : []),
-              ['code', code],
-              ['code_verifier', codeVerifier],
-              ['grant_type', 'authorization_code'],
-              ['redirect_uri', redirectUri],
-            ])).toString(),
+            body: new URLSearchParams(
+              Object.fromEntries([
+                ['client_id', this.getClientId()],
+                ...(this.getClientSecret() ? [['client_secret', this.getClientSecret()]] : []),
+                ['code', code],
+                ['code_verifier', codeVerifier],
+                ['grant_type', 'authorization_code'],
+                ['redirect_uri', redirectUri],
+              ]),
+            ).toString(),
           },
           getNetworkConfig(),
         );
 
         if (!tokenResponse.ok) {
           const errorData = await tokenResponse.json().catch(() => ({}));
-          operation.failure('Token exchange failed', { statusCode: tokenResponse.status, errorData });
+          operation.failure('Token exchange failed', {
+            metadata: { statusCode: tokenResponse.status, errorData },
+          });
           throw new AuthenticationError(
             `Token exchange failed: ${tokenResponse.status} ${tokenResponse.statusText}`,
-            { operation: 'token-exchange', statusCode: tokenResponse.status },
+            { operation: 'token-exchange', metadata: { statusCode: tokenResponse.status } },
           );
         }
 
@@ -350,7 +353,7 @@ export class UnifiedOAuthManager {
           refresh_token: tokens.refresh_token,
           token_type: tokens.token_type || 'Bearer',
           scope: this.config.scopes?.join(' ') || this.SCOPES.join(' '),
-          expiry_date: tokens.expiry_date || (Date.now() + (tokens.expires_in || 3600) * 1000),
+          expiry_date: tokens.expiry_date || Date.now() + (tokens.expires_in || 3600) * 1000,
         };
 
         return credentials;
@@ -367,7 +370,7 @@ export class UnifiedOAuthManager {
     // Generate cryptographically secure random bytes for code verifier
     const array = new Uint8Array(32);
     crypto.getRandomValues(array);
-    
+
     // Convert to base64url format (RFC 7636)
     const codeVerifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
       .replace(/\+/g, '-')
@@ -379,7 +382,7 @@ export class UnifiedOAuthManager {
     const data = encoder.encode(codeVerifier);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = new Uint8Array(hashBuffer);
-    
+
     // Convert hash to base64url format
     const codeChallenge = btoa(String.fromCharCode.apply(null, Array.from(hashArray)))
       .replace(/\+/g, '-')
@@ -406,7 +409,6 @@ export class UnifiedOAuthManager {
 
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
-
 
   /**
    * Refresh expired tokens
