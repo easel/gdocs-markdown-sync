@@ -74,7 +74,7 @@
     "@typescript-eslint/parser": "^7.0.0",
     "bun-types": "^1.2.20",
     "eslint": "^9.0.0",
-    "eslint-config-prettier": "^9.1.0",
+    "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.29.1",
     "globals": "^15",
     "obsidian": "^1.0.0",
