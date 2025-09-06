@@ -21,6 +21,7 @@ import {
   EnhancedNotice,
 } from './types/plugin-types';
 import { UnifiedAuthModal } from './ui/UnifiedAuthModal';
+import { getNetworkConfig } from './utils/Config';
 import { ErrorUtils, BaseError } from './utils/ErrorUtils';
 import { getBuildVersion, VERSION_INFO } from './version';
 
@@ -1100,26 +1101,33 @@ export default class GoogleDocsSyncPlugin extends Plugin {
   }
 
   async getAuthenticatedDriveAPI(): Promise<DriveAPI> {
-    // Check cache first
-    const now = Date.now();
-    if (this.driveAPICache && now - this.driveAPICache.timestamp < this.DRIVE_API_CACHE_TTL) {
-      return this.driveAPICache.api;
-    }
+    return ErrorUtils.withErrorContext(
+      async () => {
+        // Check cache first
+        const now = Date.now();
+        if (this.driveAPICache && now - this.driveAPICache.timestamp < this.DRIVE_API_CACHE_TTL) {
+          return this.driveAPICache.api;
+        }
 
-    try {
-      const authClient = await this.authManager.getAuthClient();
-      const api = new DriveAPI(authClient.credentials.access_token);
+        const authClient = await this.authManager.getAuthClient();
+        
+        // Create DriveAPI with same network configuration as CLI
+        const networkConfig = getNetworkConfig();
+        const api = new DriveAPI(authClient.credentials.access_token, 'Bearer', {
+          timeout: networkConfig.timeout,
+          retryConfig: networkConfig.retryConfig,
+        });
 
-      // Cache the API instance
-      this.driveAPICache = { api, timestamp: now };
-
-      return api;
-    } catch (error) {
-      console.error('❌ Failed to get authenticated Drive API:', error);
+        // Cache the API instance
+        this.driveAPICache = { api, timestamp: now };
+        return api;
+      },
+      { operation: 'get-drive-api-plugin' },
+    )().catch((error) => {
       // Clear cache on error
       this.driveAPICache = null;
       throw error;
-    }
+    });
   }
 
   /**
@@ -1362,23 +1370,24 @@ export default class GoogleDocsSyncPlugin extends Plugin {
    * Resolve folder name or ID to actual folder ID and validate it exists
    */
   async resolveDriveFolderId(): Promise<string> {
-    if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
-      throw new Error(
-        'Google Drive folder not configured. Please set the Drive folder ID in plugin settings.',
-      );
-    }
+    return ErrorUtils.withErrorContext(
+      async () => {
+        if (!this.settings.driveFolderId || this.settings.driveFolderId.trim() === '') {
+          throw new Error(
+            'Google Drive folder not configured. Please set the Drive folder ID in plugin settings.',
+          );
+        }
 
-    const driveAPI = await this.getAuthenticatedDriveAPI();
-    try {
-      const resolvedId = await driveAPI.resolveFolderId(this.settings.driveFolderId.trim());
-      console.log(`✅ Resolved folder "${this.settings.driveFolderId}" to ID: ${resolvedId}`);
-      return resolvedId;
-    } catch (error) {
-      console.error(`❌ Failed to resolve folder "${this.settings.driveFolderId}":`, error);
-      throw new Error(
-        `Cannot access Google Drive folder "${this.settings.driveFolderId}". Please check the folder ID/name and your permissions.`,
-      );
-    }
+        const driveAPI = await this.getAuthenticatedDriveAPI();
+        const resolvedId = await driveAPI.resolveFolderId(this.settings.driveFolderId.trim());
+        console.log(`✅ Resolved folder "${this.settings.driveFolderId}" to ID: ${resolvedId}`);
+        return resolvedId;
+      },
+      { 
+        operation: 'resolve-drive-folder',
+        resourceId: this.settings.driveFolderId 
+      },
+    )();
   }
 
   // Placeholder methods for Google Drive API integration

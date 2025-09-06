@@ -295,9 +295,8 @@ export class SyncOperations {
       const content = await this.storage.readFile(file.path);
       const { frontmatter, markdown } = SyncUtils.parseFrontMatter(content);
 
-      // Get authentication
-      const authClient = await this.plugin.authManager.getAuthClient();
-      const driveAPI = new DriveAPI(authClient.credentials.access_token);
+      // Use plugin's cached DriveAPI instance
+      const driveAPI = await this.plugin.getAuthenticatedDriveAPI();
 
       // Find or create the Google Doc using folder-based strategy
       const googleDocInfo = await this.plugin.findOrCreateGoogleDoc(file, driveAPI, frontmatter);
