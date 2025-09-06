@@ -95,6 +95,15 @@ export class NetworkUtils {
 
         clearTimeout(timeoutId);
 
+        // Handle case where fetch returns undefined (shouldn't happen but can in tests)
+        if (!response) {
+          throw new NetworkError(
+            'Fetch returned undefined response',
+            undefined,
+            attempt,
+          );
+        }
+
         // Check if we should retry based on status code
         if (!response.ok && this.shouldRetryStatusCode(response.status, retryConfig)) {
           throw new NetworkError(

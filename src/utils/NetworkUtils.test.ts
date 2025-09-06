@@ -10,6 +10,11 @@ import { NetworkUtils, NetworkError, TimeoutError, RateLimitError } from './Netw
 const originalFetch = global.fetch;
 
 describe('NetworkUtils', () => {
+  beforeEach(() => {
+    // Ensure clean slate for each test
+    global.fetch = originalFetch;
+  });
+  
   afterEach(() => {
     global.fetch = originalFetch;
   });
@@ -33,13 +38,25 @@ describe('NetworkUtils', () => {
       const mockFailure = new Response('Internal Server Error', { status: 500 });
       const mockSuccess = new Response(JSON.stringify({ success: true }), { status: 200 });
 
-      global.fetch = mock()
-        .mockResolvedValueOnce(mockFailure)
-        .mockResolvedValueOnce(mockFailure)
-        .mockResolvedValueOnce(mockSuccess);
+      let callCount = 0;
+      let callsForThisTest = 0;
+      const testUrl = 'https://api.example.com/test-500-retry';
+      
+      global.fetch = mock((url) => {
+        if (url === testUrl) {
+          callsForThisTest++;
+          callCount++;
+          if (callCount <= 2) {
+            return Promise.resolve(mockFailure);
+          }
+          return Promise.resolve(mockSuccess);
+        }
+        // For other tests, return a default success response
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      });
 
       const response = await NetworkUtils.fetchWithRetry(
-        'https://api.example.com/test',
+        testUrl,
         {},
         {
           timeout: 1000,
@@ -48,7 +65,7 @@ describe('NetworkUtils', () => {
       );
 
       expect(response.ok).toBe(true);
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(callsForThisTest).toBe(3);
     });
 
     it('should handle rate limiting with retry-after header', async () => {
@@ -58,10 +75,23 @@ describe('NetworkUtils', () => {
       });
       const mockSuccess = new Response(JSON.stringify({ success: true }), { status: 200 });
 
-      global.fetch = mock().mockResolvedValueOnce(mockRateLimit).mockResolvedValueOnce(mockSuccess);
+      let callsForThisTest = 0;
+      const testUrl = 'https://api.example.com/test-rate-limit';
+      
+      global.fetch = mock((url) => {
+        if (url === testUrl) {
+          callsForThisTest++;
+          if (callsForThisTest === 1) {
+            return Promise.resolve(mockRateLimit);
+          }
+          return Promise.resolve(mockSuccess);
+        }
+        // For other tests, return a default success response
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      });
 
       const response = await NetworkUtils.fetchWithRetry(
-        'https://api.example.com/test',
+        testUrl,
         {},
         {
           timeout: 5000,
@@ -75,7 +105,7 @@ describe('NetworkUtils', () => {
       );
 
       expect(response.ok).toBe(true);
-      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(callsForThisTest).toBe(2);
     });
 
     it('should throw NetworkError after max retries exceeded', async () => {
